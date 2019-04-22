@@ -37,6 +37,7 @@ services:
     ports:
       - '8080:8080'
       - '5005:5005'
+      - '9991:9991'
     depends_on:
        - hadoop-master
     volumes:
