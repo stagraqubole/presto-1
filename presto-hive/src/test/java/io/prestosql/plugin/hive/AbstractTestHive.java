@@ -258,6 +258,7 @@ import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newFixedThreadPool;
+import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.stream.Collectors.toList;
 import static org.apache.hadoop.hive.common.FileUtils.makePartName;
@@ -732,10 +733,12 @@ public abstract class AbstractTestHive
                 false,
                 true,
                 1000,
+                Optional.empty(),
                 TYPE_MANAGER,
                 locationService,
                 partitionUpdateCodec,
                 newFixedThreadPool(2),
+                newScheduledThreadPool(1),
                 new HiveTypeTranslator(),
                 TEST_SERVER_VERSION,
                 SqlStandardAccessControlMetadata::new);
@@ -1045,6 +1048,7 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorSession session = newSession();
             ConnectorMetadata metadata = transaction.getMetadata();
+            metadata.beginQuery(session);
             ConnectorTableHandle tableHandle = getTableHandle(metadata, schemaTableName);
 
             List<ColumnHandle> columnHandles = metadata.getColumnHandles(session, tableHandle).values().stream()
@@ -1078,6 +1082,7 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorSession session = newSession();
             ConnectorMetadata metadata = transaction.getMetadata();
+            metadata.beginQuery(session);
             ConnectorTableHandle tableHandle = getTableHandle(metadata, schemaTableName);
             List<ColumnHandle> columnHandles = metadata.getColumnHandles(session, tableHandle).values().stream()
                     .filter(columnHandle -> !((HiveColumnHandle) columnHandle).isHidden())
@@ -1323,6 +1328,7 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
+            metadata.beginQuery(session);
 
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tablePartitionFormat);
             ConnectorSplitSource splitSource = splitManager.getSplits(transaction.getTransactionHandle(), session, tableHandle, UNGROUPED_SCHEDULING);
@@ -1337,6 +1343,7 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
+            metadata.beginQuery(session);
 
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableUnpartitioned);
             ConnectorSplitSource splitSource = splitManager.getSplits(transaction.getTransactionHandle(), session, tableHandle, UNGROUPED_SCHEDULING);
@@ -1374,6 +1381,7 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
+            metadata.beginQuery(session);
 
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableOfflinePartition);
             assertNotNull(tableHandle);
@@ -1425,12 +1433,13 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
+            metadata.beginQuery(session);
 
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableBucketedStringInt);
             List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, tableHandle).values());
             Map<String, Integer> columnIndex = indexColumns(columnHandles);
 
-            assertTableIsBucketed(tableHandle);
+            assertTableIsBucketed(tableHandle, transaction, session);
 
             String testString = "test";
             Integer testInt = 13;
@@ -1465,12 +1474,13 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
+            metadata.beginQuery(session);
 
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableBucketedBigintBoolean);
             List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, tableHandle).values());
             Map<String, Integer> columnIndex = indexColumns(columnHandles);
 
-            assertTableIsBucketed(tableHandle);
+            assertTableIsBucketed(tableHandle, transaction, session);
 
             String testString = "test";
             Long testBigint = 89L;
@@ -1504,12 +1514,13 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
+            metadata.beginQuery(session);
 
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableBucketedDoubleFloat);
             List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, tableHandle).values());
             Map<String, Integer> columnIndex = indexColumns(columnHandles);
 
-            assertTableIsBucketed(tableHandle);
+            assertTableIsBucketed(tableHandle, transaction, session);
 
             ImmutableMap<ColumnHandle, NullableValue> bindings = ImmutableMap.<ColumnHandle, NullableValue>builder()
                     .put(columnHandles.get(columnIndex.get("t_float")), NullableValue.of(REAL, (long) floatToRawIntBits(87.1f)))
@@ -1571,6 +1582,7 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
+            metadata.beginQuery(session);
 
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableName);
 
@@ -1650,10 +1662,10 @@ public abstract class AbstractTestHive
         assertEquals(idCount.keySet(), expectedIds);
     }
 
-    private void assertTableIsBucketed(ConnectorTableHandle tableHandle)
+    private void assertTableIsBucketed(ConnectorTableHandle tableHandle, Transaction transaction, ConnectorSession session)
     {
         // the bucketed test tables should have exactly 32 splits
-        List<ConnectorSplit> splits = getAllSplits(tableHandle);
+        List<ConnectorSplit> splits = getAllSplits(tableHandle, transaction, session);
         assertEquals(splits.size(), 32);
 
         // verify all paths are unique
@@ -1670,13 +1682,14 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
+            metadata.beginQuery(session);
 
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tablePartitionFormat);
             ConnectorTableMetadata tableMetadata = metadata.getTableMetadata(session, tableHandle);
             List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, tableHandle).values());
             Map<String, Integer> columnIndex = indexColumns(columnHandles);
 
-            List<ConnectorSplit> splits = getAllSplits(tableHandle);
+            List<ConnectorSplit> splits = getAllSplits(tableHandle, transaction, session);
             assertEquals(splits.size(), tablePartitionFormatPartitions.size());
 
             for (ConnectorSplit split : splits) {
@@ -1762,12 +1775,13 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
+            metadata.beginQuery(session);
 
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tablePartitionFormat);
             List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, tableHandle).values());
             Map<String, Integer> columnIndex = indexColumns(columnHandles);
 
-            List<ConnectorSplit> splits = getAllSplits(tableHandle);
+            List<ConnectorSplit> splits = getAllSplits(tableHandle, transaction, session);
             assertEquals(splits.size(), tablePartitionFormatPartitions.size());
 
             for (ConnectorSplit split : splits) {
@@ -1804,12 +1818,13 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
+            metadata.beginQuery(session);
 
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableUnpartitioned);
             List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, tableHandle).values());
             Map<String, Integer> columnIndex = indexColumns(columnHandles);
 
-            List<ConnectorSplit> splits = getAllSplits(tableHandle);
+            List<ConnectorSplit> splits = getAllSplits(tableHandle, transaction, session);
             assertThat(splits).hasSameSizeAs(tableUnpartitionedPartitions);
 
             for (ConnectorSplit split : splits) {
@@ -1850,7 +1865,9 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorMetadata connectorMetadata = transaction.getMetadata();
             ConnectorTableHandle table = getTableHandle(connectorMetadata, tableUnpartitioned);
-            readTable(transaction, table, ImmutableList.of(invalidColumnHandle), newSession(), TupleDomain.all(), OptionalInt.empty(), Optional.empty());
+            ConnectorSession session = newSession();
+            connectorMetadata.beginQuery(session);
+            readTable(transaction, table, ImmutableList.of(invalidColumnHandle), session, TupleDomain.all(), OptionalInt.empty(), Optional.empty());
         }
     }
 
@@ -1861,7 +1878,9 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorTableHandle table = getTableHandle(metadata, tablePartitionSchemaChange);
-            readTable(transaction, table, ImmutableList.of(dsColumn), newSession(), TupleDomain.all(), OptionalInt.empty(), Optional.empty());
+            ConnectorSession session = newSession();
+            metadata.beginQuery(session);
+            readTable(transaction, table, ImmutableList.of(dsColumn), session, TupleDomain.all(), OptionalInt.empty(), Optional.empty());
         }
     }
 
@@ -1983,6 +2002,7 @@ public abstract class AbstractTestHive
             try (Transaction transaction = newTransaction()) {
                 ConnectorSession session = newSession();
                 ConnectorMetadata metadata = transaction.getMetadata();
+                metadata.beginQuery(session);
 
                 ConnectorTableHandle tableHandle = getTableHandle(metadata, tableName);
                 List<ColumnHandle> columnHandles = filterNonHiddenColumnHandles(metadata.getColumnHandles(session, tableHandle).values());
@@ -2301,11 +2321,12 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
+            metadata.beginQuery(session);
 
             ConnectorTableHandle tableHandle = getTableHandle(metadata, table);
             List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, tableHandle).values());
 
-            List<ConnectorSplit> splits = getAllSplits(tableHandle);
+            List<ConnectorSplit> splits = getAllSplits(tableHandle, transaction, session);
             assertThat(splits).hasSize(bucketCount);
 
             int actualRowCount = 0;
@@ -3024,6 +3045,7 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorSession session = newSession();
             ConnectorMetadata metadata = transaction.getMetadata();
+            metadata.beginQuery(session);
             // load the new table
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableName);
             List<ColumnHandle> columnHandles = filterNonHiddenColumnHandles(metadata.getColumnHandles(session, tableHandle).values());
@@ -3062,6 +3084,7 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorSession session = newSession();
             ConnectorMetadata metadata = transaction.getMetadata();
+            metadata.beginQuery(session);
             queryId = session.getQueryId();
 
             ConnectorTableMetadata tableMetadata = new ConnectorTableMetadata(tableName, createTableColumns, createTableProperties(storageFormat, partitionedBy));
@@ -3072,6 +3095,7 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorSession session = newSession();
             ConnectorMetadata metadata = transaction.getMetadata();
+            metadata.beginQuery(session);
 
             // load the new table
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableName);
@@ -3126,6 +3150,7 @@ public abstract class AbstractTestHive
             try (Transaction transaction = newTransaction()) {
                 ConnectorSession session = newSession();
                 ConnectorMetadata metadata = transaction.getMetadata();
+                metadata.beginQuery(session);
 
                 // load the new table
                 ConnectorTableHandle tableHandle = getTableHandle(metadata, tableName);
@@ -3205,6 +3230,7 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorSession session = newSession();
             ConnectorMetadata metadata = transaction.getMetadata();
+            metadata.beginQuery(session);
 
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableName);
             List<ColumnHandle> columnHandles = filterNonHiddenColumnHandles(metadata.getColumnHandles(session, tableHandle).values());
@@ -3247,6 +3273,7 @@ public abstract class AbstractTestHive
             try (Transaction transaction = newTransaction()) {
                 ConnectorSession session = newSession();
                 ConnectorMetadata metadata = transaction.getMetadata();
+                metadata.beginQuery(session);
 
                 // load the new table
                 ConnectorTableHandle tableHandle = getTableHandle(metadata, tableName);
@@ -3326,6 +3353,7 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorSession session = newSession();
             ConnectorMetadata metadata = transaction.getMetadata();
+            metadata.beginQuery(session);
 
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableName);
             List<ColumnHandle> columnHandles = filterNonHiddenColumnHandles(metadata.getColumnHandles(session, tableHandle).values());
@@ -3460,6 +3488,7 @@ public abstract class AbstractTestHive
             // load the new table
             ConnectorSession session = newSession();
             ConnectorMetadata metadata = transaction.getMetadata();
+            metadata.beginQuery(session);
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableName);
             List<ColumnHandle> columnHandles = filterNonHiddenColumnHandles(metadata.getColumnHandles(session, tableHandle).values());
 
@@ -3511,10 +3540,11 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorSession session = newSession();
             ConnectorMetadata metadata = transaction.getMetadata();
+            metadata.beginQuery(session);
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableName);
             List<ColumnHandle> columnHandles = filterNonHiddenColumnHandles(metadata.getColumnHandles(session, tableHandle).values());
 
-            MaterializedResult result = readTable(transaction, tableHandle, columnHandles, newSession(), TupleDomain.all(), OptionalInt.empty(), Optional.empty());
+            MaterializedResult result = readTable(transaction, tableHandle, columnHandles, session, TupleDomain.all(), OptionalInt.empty(), Optional.empty());
             assertEqualsIgnoreOrder(result.getMaterializedRows(), CREATE_TABLE_PARTITIONED_DATA.getMaterializedRows());
 
             // verify we did not modify the table directory
@@ -3561,6 +3591,7 @@ public abstract class AbstractTestHive
             try (Transaction transaction = newTransaction()) {
                 ConnectorSession session = newSession();
                 ConnectorMetadata metadata = transaction.getMetadata();
+                metadata.beginQuery(session);
                 ConnectorTableHandle tableHandle = getTableHandle(metadata, tableName);
 
                 // verify partitions were created
@@ -3633,11 +3664,12 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
+            metadata.beginQuery(session);
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableName);
             List<ColumnHandle> columnHandles = filterNonHiddenColumnHandles(metadata.getColumnHandles(session, tableHandle).values());
 
             // verify the data is unchanged
-            MaterializedResult result = readTable(transaction, tableHandle, columnHandles, newSession(), TupleDomain.all(), OptionalInt.empty(), Optional.empty());
+            MaterializedResult result = readTable(transaction, tableHandle, columnHandles, session, TupleDomain.all(), OptionalInt.empty(), Optional.empty());
             assertEqualsIgnoreOrder(result.getMaterializedRows(), resultBuilder.build().getMaterializedRows());
 
             // verify we did not modify the table directory
@@ -3790,6 +3822,7 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorSession session = newSession();
             ConnectorMetadata metadata = transaction.getMetadata();
+            metadata.beginQuery(session);
 
             // verify partitions were created
             List<String> partitionNames = transaction.getMetastore().getPartitionNames(new HiveIdentity(session), tableName.getSchemaName(), tableName.getTableName())
@@ -3831,13 +3864,13 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorSession session = newSession();
             ConnectorMetadata metadata = transaction.getMetadata();
+            metadata.beginQuery(session);
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableName);
             List<ColumnHandle> columnHandles = filterNonHiddenColumnHandles(metadata.getColumnHandles(session, tableHandle).values());
             HiveColumnHandle dsColumnHandle = (HiveColumnHandle) metadata.getColumnHandles(session, tableHandle).get("ds");
             int dsColumnOrdinalPosition = columnHandles.indexOf(dsColumnHandle);
 
             // verify the data
-            session = newSession();
             ImmutableList<MaterializedRow> expectedRows = expectedResultBuilder.build().getMaterializedRows().stream()
                     .filter(row -> !"2015-07-03".equals(row.getField(dsColumnOrdinalPosition)))
                     .collect(toImmutableList());
@@ -3886,10 +3919,11 @@ public abstract class AbstractTestHive
         try (Transaction transaction = newTransaction()) {
             ConnectorSession session = newSession();
             ConnectorMetadata metadata = transaction.getMetadata();
+            metadata.beginQuery(session);
 
             ConnectorTableHandle tableHandle = getTableHandle(metadata, new SchemaTableName(database, tableName));
             ConnectorTableMetadata tableMetadata = metadata.getTableMetadata(session, tableHandle);
-            HiveSplit hiveSplit = getHiveSplit(tableHandle);
+            HiveSplit hiveSplit = getHiveSplit(tableHandle, transaction, session);
 
             List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, tableHandle).values());
 
@@ -3898,9 +3932,9 @@ public abstract class AbstractTestHive
         }
     }
 
-    protected HiveSplit getHiveSplit(ConnectorTableHandle tableHandle)
+    protected HiveSplit getHiveSplit(ConnectorTableHandle tableHandle, Transaction transaction, ConnectorSession session)
     {
-        List<ConnectorSplit> splits = getAllSplits(tableHandle);
+        List<ConnectorSplit> splits = getAllSplits(tableHandle, transaction, session);
         assertEquals(splits.size(), 1);
         return (HiveSplit) getOnlyElement(splits);
     }
@@ -4208,11 +4242,9 @@ public abstract class AbstractTestHive
         return splitCount;
     }
 
-    private List<ConnectorSplit> getAllSplits(ConnectorTableHandle tableHandle)
+    private List<ConnectorSplit> getAllSplits(ConnectorTableHandle tableHandle, Transaction transaction, ConnectorSession session)
     {
-        try (Transaction transaction = newTransaction()) {
-            return getAllSplits(splitManager.getSplits(transaction.getTransactionHandle(), newSession(), tableHandle, UNGROUPED_SCHEDULING));
-        }
+        return getAllSplits(splitManager.getSplits(transaction.getTransactionHandle(), session, tableHandle, UNGROUPED_SCHEDULING));
     }
 
     protected static List<ConnectorSplit> getAllSplits(ConnectorSplitSource splitSource)
@@ -4684,6 +4716,7 @@ public abstract class AbstractTestHive
             // load the new table
             ConnectorSession session = newSession();
             ConnectorMetadata metadata = transaction.getMetadata();
+            metadata.beginQuery(session);
             ConnectorTableHandle tableHandle = getTableHandle(metadata, tableName);
             List<ColumnHandle> columnHandles = filterNonHiddenColumnHandles(metadata.getColumnHandles(session, tableHandle).values());
 

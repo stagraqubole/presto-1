@@ -23,7 +23,7 @@ import static io.prestosql.tests.TestGroups.HIVE_TRANSACTIONAL;
 import static io.prestosql.tests.utils.QueryExecutors.onHive;
 import static java.util.Locale.ENGLISH;
 
-public class TestHiveTransactionalTable
+public class TestHiveTransactionalTableInsert
         extends ProductTest
 {
     @Test(dataProvider = "transactionalTableType", groups = HIVE_TRANSACTIONAL)
