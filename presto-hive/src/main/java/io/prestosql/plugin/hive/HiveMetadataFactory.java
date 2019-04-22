@@ -16,6 +16,7 @@ package io.prestosql.plugin.hive;
 import io.airlift.concurrent.BoundedExecutor;
 import io.airlift.json.JsonCodec;
 import io.airlift.log.Logger;
+import io.airlift.units.Duration;
 import io.prestosql.plugin.hive.metastore.CachingHiveMetastore;
 import io.prestosql.plugin.hive.metastore.HiveMetastore;
 import io.prestosql.plugin.hive.metastore.SemiTransactionalHiveMetastore;
@@ -27,6 +28,7 @@ import org.joda.time.DateTimeZone;
 import javax.inject.Inject;
 
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
@@ -53,6 +55,8 @@ public class HiveMetadataFactory
     private final TypeTranslator typeTranslator;
     private final String prestoVersion;
     private final AccessControlMetadataFactory accessControlMetadataFactory;
+    private final Duration hiveTransactionHeartbeatInterval;
+    private final ScheduledExecutorService heartbeatService;
 
     @Inject
     @SuppressWarnings("deprecation")
@@ -62,6 +66,7 @@ public class HiveMetadataFactory
             HdfsEnvironment hdfsEnvironment,
             HivePartitionManager partitionManager,
             @ForHive ExecutorService executorService,
+            @ForHiveTransactionHeartbeats ScheduledExecutorService heartbeatService,
             TypeManager typeManager,
             LocationService locationService,
             JsonCodec<PartitionUpdate> partitionUpdateCodec,
@@ -81,10 +86,12 @@ public class HiveMetadataFactory
                 hiveConfig.getWritesToNonManagedTablesEnabled(),
                 hiveConfig.getCreatesOfNonManagedTablesEnabled(),
                 hiveConfig.getPerTransactionMetastoreCacheMaximumSize(),
+                hiveConfig.getHiveTransactionHeartbeatInterval(),
                 typeManager,
                 locationService,
                 partitionUpdateCodec,
                 executorService,
+                heartbeatService,
                 typeTranslator,
                 nodeVersion.toString(),
                 accessControlMetadataFactory);
@@ -102,10 +109,12 @@ public class HiveMetadataFactory
             boolean writesToNonManagedTablesEnabled,
             boolean createsOfNonManagedTablesEnabled,
             long perTransactionCacheMaximumSize,
+            Duration hiveTransactionHeartbeatInterval,
             TypeManager typeManager,
             LocationService locationService,
             JsonCodec<PartitionUpdate> partitionUpdateCodec,
             ExecutorService executorService,
+            ScheduledExecutorService heartbeatService,
             TypeTranslator typeTranslator,
             String prestoVersion,
             AccessControlMetadataFactory accessControlMetadataFactory)
@@ -116,6 +125,7 @@ public class HiveMetadataFactory
         this.writesToNonManagedTablesEnabled = writesToNonManagedTablesEnabled;
         this.createsOfNonManagedTablesEnabled = createsOfNonManagedTablesEnabled;
         this.perTransactionCacheMaximumSize = perTransactionCacheMaximumSize;
+        this.hiveTransactionHeartbeatInterval = hiveTransactionHeartbeatInterval;
 
         this.metastore = requireNonNull(metastore, "metastore is null");
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
@@ -136,6 +146,7 @@ public class HiveMetadataFactory
         }
 
         renameExecution = new BoundedExecutor(executorService, maxConcurrentFileRenames);
+        this.heartbeatService = heartbeatService;
     }
 
     @Override
@@ -146,7 +157,9 @@ public class HiveMetadataFactory
                 CachingHiveMetastore.memoizeMetastore(this.metastore, perTransactionCacheMaximumSize), // per-transaction cache
                 renameExecution,
                 skipDeletionForAlter,
-                skipTargetCleanupOnRollback);
+                skipTargetCleanupOnRollback,
+                hiveTransactionHeartbeatInterval,
+                heartbeatService);
 
         return new HiveMetadata(
                 metastore,

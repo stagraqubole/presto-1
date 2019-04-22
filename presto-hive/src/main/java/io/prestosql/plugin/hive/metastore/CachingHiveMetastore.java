@@ -24,9 +24,11 @@ import com.google.common.util.concurrent.UncheckedExecutionException;
 import io.airlift.units.Duration;
 import io.prestosql.plugin.hive.ForCachingHiveMetastore;
 import io.prestosql.plugin.hive.HiveConfig;
+import io.prestosql.plugin.hive.HivePartition;
 import io.prestosql.plugin.hive.HiveType;
 import io.prestosql.plugin.hive.PartitionStatistics;
 import io.prestosql.spi.PrestoException;
+import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.spi.security.RoleGrant;
 import io.prestosql.spi.statistics.ColumnStatisticType;
 import io.prestosql.spi.type.Type;
@@ -85,6 +87,9 @@ public class CachingHiveMetastore
     private final LoadingCache<UserTableKey, Set<HivePrivilegeInfo>> tablePrivilegesCache;
     private final LoadingCache<String, Set<String>> rolesCache;
     private final LoadingCache<HivePrincipal, Set<RoleGrant>> roleGrantsCache;
+    private final LoadingCache<String, String> configValuesCache;
+
+    private static final String CONFIG_NOT_FOUND_AT_SERVER = "@NOT_FOUND";
 
     @Inject
     public CachingHiveMetastore(@ForCachingHiveMetastore HiveMetastore delegate, @ForCachingHiveMetastore Executor executor, HiveConfig hiveConfig)
@@ -193,6 +198,9 @@ public class CachingHiveMetastore
 
         roleGrantsCache = newCacheBuilder(expiresAfterWriteMillis, refreshMills, maximumSize)
                 .build(asyncReloading(CacheLoader.from(this::loadRoleGrants), executor));
+
+        configValuesCache = newCacheBuilder(expiresAfterWriteMillis, refreshMills, maximumSize)
+                .build(asyncReloading(CacheLoader.from(this::loadConfigValue), executor));
     }
 
     @Managed
@@ -736,6 +744,57 @@ public class CachingHiveMetastore
     public Set<HivePrivilegeInfo> listTablePrivileges(String databaseName, String tableName, HivePrincipal principal)
     {
         return get(tablePrivilegesCache, new UserTableKey(principal, databaseName, tableName));
+    }
+
+    @Override
+    public String getConfigValue(String name, String defaultValue)
+    {
+        String value = get(configValuesCache, name);
+        if (value.equals(CONFIG_NOT_FOUND_AT_SERVER)) {
+            return defaultValue;
+        }
+        return value;
+    }
+
+    private String loadConfigValue(String name)
+    {
+        return delegate.getConfigValue(name, CONFIG_NOT_FOUND_AT_SERVER);
+    }
+
+    @Override
+    public long openTransaction(String user)
+    {
+        return delegate.openTransaction(user);
+    }
+
+    @Override
+    public void commitTransaction(long transactionId)
+    {
+        delegate.commitTransaction(transactionId);
+    }
+
+    @Override
+    public void rollbackTransaction(long transactionId)
+    {
+        delegate.rollbackTransaction(transactionId);
+    }
+
+    @Override
+    public boolean sendTransactionHeartbeatAndFindIfValid(long transaction)
+    {
+        return delegate.sendTransactionHeartbeatAndFindIfValid(transaction);
+    }
+
+    @Override
+    public void acquireSharedReadLock(String user, String queryId, long txn, List<SchemaTableName> fullTables, List<HivePartition> partitions)
+    {
+        delegate.acquireSharedReadLock(user, queryId, txn, fullTables, partitions);
+    }
+
+    @Override
+    public String getValidWriteIds(List<SchemaTableName> tables, long currentTxn)
+    {
+        return delegate.getValidWriteIds(tables, currentTxn);
     }
 
     public Set<HivePrivilegeInfo> loadTablePrivileges(String databaseName, String tableName, HivePrincipal principal)

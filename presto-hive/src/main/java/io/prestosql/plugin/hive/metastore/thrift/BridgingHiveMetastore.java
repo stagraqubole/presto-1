@@ -14,6 +14,7 @@
 package io.prestosql.plugin.hive.metastore.thrift;
 
 import com.google.common.collect.ImmutableMap;
+import io.prestosql.plugin.hive.HivePartition;
 import io.prestosql.plugin.hive.HiveType;
 import io.prestosql.plugin.hive.HiveUtil;
 import io.prestosql.plugin.hive.PartitionStatistics;
@@ -374,5 +375,47 @@ public class BridgingHiveMetastore
     public Set<HivePrivilegeInfo> listTablePrivileges(String databaseName, String tableName, HivePrincipal principal)
     {
         return delegate.listTablePrivileges(databaseName, tableName, principal);
+    }
+
+    @Override
+    public String getConfigValue(String name, String defaultValue)
+    {
+        return delegate.getConfigValue(name, defaultValue);
+    }
+
+    @Override
+    public long openTransaction(String user)
+    {
+        return delegate.openTransaction(user);
+    }
+
+    @Override
+    public void commitTransaction(long transactionId)
+    {
+        delegate.commitTransaction(transactionId);
+    }
+
+    @Override
+    public void rollbackTransaction(long transactionId)
+    {
+        delegate.rollbackTransaction(transactionId);
+    }
+
+    @Override
+    public boolean sendTransactionHeartbeatAndFindIfValid(long transaction)
+    {
+        return delegate.sendTransactionHeartbeatAndFindIfValid(transaction);
+    }
+
+    @Override
+    public void acquireSharedReadLock(String user, String queryId, long txn, List<SchemaTableName> fullTables, List<HivePartition> partitions)
+    {
+        delegate.acquireSharedReadLock(user, queryId, txn, fullTables, partitions);
+    }
+
+    @Override
+    public String getValidWriteIds(List<SchemaTableName> tables, long currentTxn)
+    {
+        return delegate.getValidWriteIds(tables, currentTxn);
     }
 }

@@ -108,6 +108,11 @@ public interface HiveMetastore
 
     Set<HivePrivilegeInfo> listTablePrivileges(String databaseName, String tableName, HivePrincipal principal);
 
+    default String getConfigValue(String name, String defaultValue)
+    {
+        return defaultValue;
+    }
+
     default long openTransaction(String user)
     {
         throw new UnsupportedOperationException();
