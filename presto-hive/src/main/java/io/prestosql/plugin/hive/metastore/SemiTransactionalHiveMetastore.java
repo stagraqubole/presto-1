@@ -20,11 +20,15 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import io.airlift.concurrent.MoreFutures;
 import io.airlift.log.Logger;
+import io.airlift.units.Duration;
 import io.prestosql.plugin.hive.HdfsEnvironment;
 import io.prestosql.plugin.hive.HdfsEnvironment.HdfsContext;
 import io.prestosql.plugin.hive.HiveBasicStatistics;
+import io.prestosql.plugin.hive.HivePartition;
+import io.prestosql.plugin.hive.HiveTableHandle;
 import io.prestosql.plugin.hive.HiveType;
 import io.prestosql.plugin.hive.LocationHandle.WriteMode;
 import io.prestosql.plugin.hive.PartitionNotFoundException;
@@ -42,6 +46,7 @@ import io.prestosql.spi.type.Type;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hive.ql.io.AcidUtils;
 
 import javax.annotation.concurrent.GuardedBy;
 
@@ -58,6 +63,8 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
@@ -72,6 +79,7 @@ import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_FILESYSTEM_ERROR;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_METASTORE_ERROR;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_PATH_ALREADY_EXISTS;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_TABLE_DROPPED_DURING_QUERY;
+import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_TABLE_TRANSACTION_ABORTED_BY_METASTORE;
 import static io.prestosql.plugin.hive.HiveMetadata.PRESTO_QUERY_ID_NAME;
 import static io.prestosql.plugin.hive.HiveUtil.isPrestoView;
 import static io.prestosql.plugin.hive.HiveUtil.toPartitionValues;
@@ -114,13 +122,27 @@ public class SemiTransactionalHiveMetastore
     private State state = State.EMPTY;
     private boolean throwOnCleanupFailure;
 
-    public SemiTransactionalHiveMetastore(HdfsEnvironment hdfsEnvironment, HiveMetastore delegate, Executor renameExecutor, boolean skipDeletionForAlter, boolean skipTargetCleanupOnRollback)
+    @GuardedBy("this")
+    private final Set<HivePartition> transactionalPartitionsRead = new HashSet();
+
+    // HiveAcidState is created for each query
+    private HiveAcidState hiveAcidState;
+
+    private final Optional<Duration> hiveTransactionHeartbeatInterval;
+    private ScheduledExecutorService heartbeater;
+
+    public SemiTransactionalHiveMetastore(HdfsEnvironment hdfsEnvironment, HiveMetastore delegate, Executor renameExecutor, boolean skipDeletionForAlter, boolean skipTargetCleanupOnRollback, Optional<Duration> hiveTransactionHeartbeatInterval)
     {
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.delegate = requireNonNull(delegate, "delegate is null");
         this.renameExecutor = requireNonNull(renameExecutor, "renameExecutor is null");
         this.skipDeletionForAlter = skipDeletionForAlter;
         this.skipTargetCleanupOnRollback = skipTargetCleanupOnRollback;
+        this.hiveTransactionHeartbeatInterval = hiveTransactionHeartbeatInterval;
+        heartbeater = Executors.newSingleThreadScheduledExecutor(
+                new ThreadFactoryBuilder().setDaemon(true)
+                        .setNameFormat("Hive-Transaction_Heartbeat-Thread")
+                        .build());
     }
 
     public synchronized List<String> getAllDatabases()
@@ -924,6 +946,84 @@ public class SemiTransactionalHiveMetastore
         finally {
             state = State.FINISHED;
         }
+    }
+
+    public synchronized void partitionsToBeRead(HiveTableHandle handle, List<HivePartition> partitions)
+    {
+        Optional<Table> table = getTable(handle.getSchemaName(), handle.getTableName());
+        checkArgument(table.isPresent(), "Table not found: " + handle.getSchemaTableName());
+
+        if (AcidUtils.isFullAcidTable(table.get().getParameters())) {
+            throw new PrestoException(NOT_SUPPORTED, format("Reading from Full Acid tables are not supported: %s.%s", table.get().getDatabaseName(), table.get().getTableName()));
+        }
+        if (AcidUtils.isInsertOnlyTable(table.get().getParameters())) {
+            transactionalPartitionsRead.addAll(partitions);
+        }
+    }
+
+    public synchronized void beginQuery(ConnectorSession session)
+    {
+        if (transactionalPartitionsRead.isEmpty()) {
+            return;
+        }
+
+        checkState(hiveTransactionHeartbeatInterval.isPresent(), "Cannot read from Hive Transactional tables, heartbeat interval is not set");
+
+        hiveAcidState = new HiveAcidState(hiveTransactionHeartbeatInterval.get());
+        hiveAcidState.setTransactionId(delegate.openTransaction(session.getUser()), session);
+        log.info("Using hive trasaction %s for QueryId: %s", hiveAcidState.getTransactionId(), session.getQueryId());
+
+        hiveAcidState.setHeartbeatTask(heartbeater, delegate);
+
+        // Take locks on all the partitions that query will use and reset the partitions list for next query in the Presto Transaction
+        try {
+            delegate.acquireSharedReadLock(session.getUser(), session.getQueryId(), hiveAcidState.getTransactionId(), transactionalPartitionsRead);
+            log.warn("REMOVE: got lock for query: " + session.getQueryId());
+
+            Set<String> tables = new HashSet();
+            for (HivePartition partition : transactionalPartitionsRead) {
+                tables.add(partition.getTableName().toString());
+            }
+            hiveAcidState.setValidWriteIds(delegate.getValidWriteIds(ImmutableList.copyOf(tables), hiveAcidState.getTransactionId()));
+        }
+        finally {
+            // Clear it for the next query in the Presto transaction
+            transactionalPartitionsRead.clear();
+        }
+    }
+
+    public String getValidWriteIds()
+    {
+        if (hiveAcidState == null) {
+            return "";
+        }
+
+        return hiveAcidState.getValidWriteIds();
+    }
+
+    public synchronized void cleanupQuery(ConnectorSession session)
+    {
+        if (hiveAcidState == null || !hiveAcidState.isTransactionOpen()) {
+            return;
+        }
+
+        hiveAcidState.endHeartbeat(session);
+
+        if (!hiveAcidState.isTrasactionValidAtMetastore()) {
+            try {
+                delegate.rollbackTransaction(hiveAcidState.getTransactionId());
+                log.info("Rolled back hive trasaction %s for QueryId: %s", hiveAcidState.getTransactionId(), session.getQueryId());
+            }
+            catch (Exception e) {
+                log.warn("Error rolling back hive trasaction %s for QueryId: %s", hiveAcidState.getTransactionId(), session.getQueryId());
+            }
+
+            throw new PrestoException(HIVE_TABLE_TRANSACTION_ABORTED_BY_METASTORE, format("Transaction %d was aborted by Hive Metastore", hiveAcidState.getTransactionId()));
+        }
+
+        // Commiting READ transaction for successful or failed queries
+        delegate.commitTransaction(hiveAcidState.getTransactionId());
+        log.info("Committed hive trasaction %s for QueryId: %s", hiveAcidState.getTransactionId(), session.getQueryId());
     }
 
     @GuardedBy("this")

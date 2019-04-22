@@ -16,6 +16,7 @@ package io.prestosql.plugin.hive;
 import io.airlift.concurrent.BoundedExecutor;
 import io.airlift.json.JsonCodec;
 import io.airlift.log.Logger;
+import io.airlift.units.Duration;
 import io.prestosql.plugin.hive.metastore.CachingHiveMetastore;
 import io.prestosql.plugin.hive.metastore.HiveMetastore;
 import io.prestosql.plugin.hive.metastore.SemiTransactionalHiveMetastore;
@@ -26,10 +27,16 @@ import org.joda.time.DateTimeZone;
 
 import javax.inject.Inject;
 
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
+import static com.google.common.base.MoreObjects.firstNonNull;
 import static java.util.Objects.requireNonNull;
+import static org.apache.hadoop.hive.conf.HiveConf.ConfVars.HIVE_TXN_TIMEOUT;
+import static org.apache.hadoop.hive.conf.HiveConf.getDefaultTimeUnit;
+import static org.apache.hadoop.hive.conf.HiveConf.toTime;
 
 public class HiveMetadataFactory
         implements Supplier<TransactionalMetadata>
@@ -53,6 +60,9 @@ public class HiveMetadataFactory
     private final TypeTranslator typeTranslator;
     private final String prestoVersion;
     private final AccessControlMetadataFactory accessControlMetadataFactory;
+    private final Optional<Duration> acidTransactionHeartbeatInterval;
+
+    public static final String ACID_NOT_SUPPORTED_DURATION = "0s";
 
     @Inject
     @SuppressWarnings("deprecation")
@@ -81,6 +91,7 @@ public class HiveMetadataFactory
                 hiveConfig.getWritesToNonManagedTablesEnabled(),
                 hiveConfig.getCreatesOfNonManagedTablesEnabled(),
                 hiveConfig.getPerTransactionMetastoreCacheMaximumSize(),
+                hiveConfig.getHiveTransactionHeartbeatInterval(),
                 typeManager,
                 locationService,
                 partitionUpdateCodec,
@@ -102,6 +113,7 @@ public class HiveMetadataFactory
             boolean writesToNonManagedTablesEnabled,
             boolean createsOfNonManagedTablesEnabled,
             long perTransactionCacheMaximumSize,
+            Duration hiveTransactionHeartbeatInterval,
             TypeManager typeManager,
             LocationService locationService,
             JsonCodec<PartitionUpdate> partitionUpdateCodec,
@@ -136,6 +148,18 @@ public class HiveMetadataFactory
         }
 
         renameExecution = new BoundedExecutor(executorService, maxConcurrentFileRenames);
+
+        String hiveServerTransactionTimeout = metastore.getConfigValue(HIVE_TXN_TIMEOUT.toString(), ACID_NOT_SUPPORTED_DURATION);
+        // Metastore implementations not supporting getConfigValue would return back the default value
+        if (hiveServerTransactionTimeout == ACID_NOT_SUPPORTED_DURATION) {
+            acidTransactionHeartbeatInterval = Optional.empty();
+            log.info("Hive Transactions are not supported by the Metastore used");
+        }
+        else {
+            acidTransactionHeartbeatInterval = Optional.of(firstNonNull(
+                    hiveTransactionHeartbeatInterval,
+                    Duration.succinctNanos(toTime(hiveServerTransactionTimeout, getDefaultTimeUnit(HIVE_TXN_TIMEOUT), TimeUnit.NANOSECONDS) / 2)));
+        }
     }
 
     @Override
@@ -146,7 +170,8 @@ public class HiveMetadataFactory
                 CachingHiveMetastore.memoizeMetastore(this.metastore, perTransactionCacheMaximumSize), // per-transaction cache
                 renameExecution,
                 skipDeletionForAlter,
-                skipTargetCleanupOnRollback);
+                skipTargetCleanupOnRollback,
+                acidTransactionHeartbeatInterval);
 
         return new HiveMetadata(
                 metastore,

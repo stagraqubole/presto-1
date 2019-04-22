@@ -24,6 +24,7 @@ import com.google.common.util.concurrent.UncheckedExecutionException;
 import io.airlift.units.Duration;
 import io.prestosql.plugin.hive.ForCachingHiveMetastore;
 import io.prestosql.plugin.hive.HiveConfig;
+import io.prestosql.plugin.hive.HivePartition;
 import io.prestosql.plugin.hive.HiveType;
 import io.prestosql.plugin.hive.PartitionStatistics;
 import io.prestosql.spi.PrestoException;
@@ -736,6 +737,48 @@ public class CachingHiveMetastore
     public Set<HivePrivilegeInfo> listTablePrivileges(String databaseName, String tableName, HivePrincipal principal)
     {
         return get(tablePrivilegesCache, new UserTableKey(principal, databaseName, tableName));
+    }
+
+    @Override
+    public String getConfigValue(String name, String defaultValue)
+    {
+        return delegate.getConfigValue(name, defaultValue);
+    }
+
+    @Override
+    public long openTransaction(String user)
+    {
+        return delegate.openTransaction(user);
+    }
+
+    @Override
+    public void commitTransaction(long transactionId)
+    {
+        delegate.commitTransaction(transactionId);
+    }
+
+    @Override
+    public void rollbackTransaction(long transactionId)
+    {
+        delegate.rollbackTransaction(transactionId);
+    }
+
+    @Override
+    public boolean sendTransactionHeartbeatAndFindIfValid(long transaction)
+    {
+        return delegate.sendTransactionHeartbeatAndFindIfValid(transaction);
+    }
+
+    @Override
+    public void acquireSharedReadLock(String user, String queryId, long transaction, Set<HivePartition> partitions)
+    {
+        delegate.acquireSharedReadLock(user, queryId, transaction, partitions);
+    }
+
+    @Override
+    public String getValidWriteIds(List<String> tableList, long currentTransaction)
+    {
+        return delegate.getValidWriteIds(tableList, currentTransaction);
     }
 
     public Set<HivePrivilegeInfo> loadTablePrivileges(String databaseName, String tableName, HivePrincipal principal)
