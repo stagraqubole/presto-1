@@ -22,9 +22,12 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import io.airlift.concurrent.MoreFutures;
 import io.airlift.log.Logger;
+import io.airlift.units.Duration;
 import io.prestosql.plugin.hive.HdfsEnvironment;
 import io.prestosql.plugin.hive.HdfsEnvironment.HdfsContext;
 import io.prestosql.plugin.hive.HiveBasicStatistics;
+import io.prestosql.plugin.hive.HivePartition;
+import io.prestosql.plugin.hive.HiveTableHandle;
 import io.prestosql.plugin.hive.HiveType;
 import io.prestosql.plugin.hive.LocationHandle.WriteMode;
 import io.prestosql.plugin.hive.PartitionNotFoundException;
@@ -42,6 +45,7 @@ import io.prestosql.spi.type.Type;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hive.common.ValidTxnWriteIdList;
 
 import javax.annotation.concurrent.GuardedBy;
 
@@ -56,11 +60,18 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
+import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -72,6 +83,7 @@ import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_FILESYSTEM_ERROR;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_METASTORE_ERROR;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_PATH_ALREADY_EXISTS;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_TABLE_DROPPED_DURING_QUERY;
+import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_TABLE_TRANSACTION_ABORTED_BY_METASTORE;
 import static io.prestosql.plugin.hive.HiveMetadata.PRESTO_QUERY_ID_NAME;
 import static io.prestosql.plugin.hive.HiveUtil.isPrestoView;
 import static io.prestosql.plugin.hive.HiveUtil.toPartitionValues;
@@ -88,7 +100,12 @@ import static io.prestosql.spi.StandardErrorCode.TRANSACTION_CONFLICT;
 import static io.prestosql.spi.security.PrincipalType.USER;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.apache.hadoop.hive.common.FileUtils.makePartName;
+import static org.apache.hadoop.hive.conf.HiveConf.ConfVars.HIVE_TXN_TIMEOUT;
+import static org.apache.hadoop.hive.conf.HiveConf.getDefaultTimeUnit;
+import static org.apache.hadoop.hive.conf.HiveConf.toTime;
 import static org.apache.hadoop.hive.metastore.TableType.MANAGED_TABLE;
 
 public class SemiTransactionalHiveMetastore
@@ -101,6 +118,10 @@ public class SemiTransactionalHiveMetastore
     private final Executor renameExecutor;
     private final boolean skipDeletionForAlter;
     private final boolean skipTargetCleanupOnRollback;
+    private final ScheduledExecutorService heartbeatExecutor;
+    private final Duration configuredTransactionHeartbeatInterval;
+
+    private boolean throwOnCleanupFailure;
 
     @GuardedBy("this")
     private final Map<SchemaTableName, Action<TableAndMore>> tableActions = new HashMap<>();
@@ -112,15 +133,21 @@ public class SemiTransactionalHiveMetastore
     private ExclusiveOperation bufferedExclusiveOperation;
     @GuardedBy("this")
     private State state = State.EMPTY;
-    private boolean throwOnCleanupFailure;
 
-    public SemiTransactionalHiveMetastore(HdfsEnvironment hdfsEnvironment, HiveMetastore delegate, Executor renameExecutor, boolean skipDeletionForAlter, boolean skipTargetCleanupOnRollback)
+    @GuardedBy("this")
+    private Optional<String> currentQueryId = Optional.empty();
+    @GuardedBy("this")
+    private Optional<HiveTransaction> currentHiveTransaction = Optional.empty();
+
+    public SemiTransactionalHiveMetastore(HdfsEnvironment hdfsEnvironment, HiveMetastore delegate, Executor renameExecutor, boolean skipDeletionForAlter, boolean skipTargetCleanupOnRollback, Duration hiveTransactionHeartbeatInterval, ScheduledExecutorService heartbeatService)
     {
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.delegate = requireNonNull(delegate, "delegate is null");
         this.renameExecutor = requireNonNull(renameExecutor, "renameExecutor is null");
         this.skipDeletionForAlter = skipDeletionForAlter;
         this.skipTargetCleanupOnRollback = skipTargetCleanupOnRollback;
+        this.heartbeatExecutor = heartbeatService;
+        this.configuredTransactionHeartbeatInterval = hiveTransactionHeartbeatInterval;
     }
 
     public synchronized List<String> getAllDatabases()
@@ -923,6 +950,142 @@ public class SemiTransactionalHiveMetastore
         }
         finally {
             state = State.FINISHED;
+        }
+    }
+
+    public void beginQuery(ConnectorSession session, List<HiveTableHandle> tableHandles)
+    {
+        String queryId = session.getQueryId();
+        List<HiveTableHandle> transactionalTables = tableHandles.stream()
+                .filter(tableHandle -> tableHandle.isTransactionalTable())
+                .collect(toImmutableList());
+
+        if (transactionalTables.isEmpty()) {
+            synchronized (this) {
+                checkState(
+                        !currentQueryId.isPresent() && !currentHiveTransaction.isPresent(),
+                        "Query already begun: %s %s while starting query %s",
+                        currentQueryId,
+                        currentHiveTransaction,
+                        queryId);
+                currentQueryId = Optional.of(queryId);
+            }
+            return;
+        }
+
+        long heartbeatInterval = firstNonNull(configuredTransactionHeartbeatInterval, getServerExpectedHeartbeatInterval()).toMillis();
+        long transactionId = delegate.openTransaction(session.getUser());
+        log.debug("Using hive transaction %s for query %s", transactionId, queryId);
+
+        ScheduledFuture<?> heartbeatTask = heartbeatExecutor.scheduleAtFixedRate(() -> {
+            if (!delegate.sendTransactionHeartbeatAndFindIfValid(transactionId)) {
+                String message = format("Hive transaction %s for query %s is invalid", transactionId, queryId);
+                log.error(message);
+                throw new RuntimeException(message);
+            }
+        }, 0, heartbeatInterval, MILLISECONDS);
+        try {
+            // Take locks on all the partitions that query will use
+            List<HivePartition> partitions = transactionalTables.stream()
+                    .filter(tableHandle -> tableHandle.getPartitions().isPresent())
+                    .flatMap(tableHandle -> tableHandle.getPartitions().get().stream())
+                    .distinct()
+                    .collect(toImmutableList());
+
+            List<SchemaTableName> fullTables = transactionalTables.stream()
+                    .filter(tableHandle -> !tableHandle.getPartitions().isPresent())
+                    .map(HiveTableHandle::getSchemaTableName)
+                    .distinct()
+                    .collect(toImmutableList());
+
+            log.debug("Acquiring lock for query %s for tables %s and partitions %s", queryId, fullTables, partitions);
+            delegate.acquireSharedReadLock(session.getUser(), queryId, transactionId, fullTables, partitions);
+
+            String validWriteIds = delegate.getValidWriteIds(
+                    transactionalTables.stream()
+                            .map(HiveTableHandle::getSchemaTableName)
+                            .collect(toImmutableList()),
+                    transactionId);
+
+            HiveTransaction transaction = new HiveTransaction(transactionId, heartbeatTask, validWriteIds);
+
+            synchronized (this) {
+                checkState(
+                        !currentQueryId.isPresent() && !currentHiveTransaction.isPresent(),
+                        "Query already begun: %s %s while starting query %s",
+                        currentQueryId,
+                        currentHiveTransaction,
+                        queryId);
+                currentQueryId = Optional.of(queryId);
+                currentHiveTransaction = Optional.of(transaction);
+            }
+        }
+        catch (RuntimeException e) {
+            try {
+                heartbeatTask.cancel(true);
+            }
+            catch (RuntimeException nested) {
+                if (e != nested) {
+                    e.addSuppressed(nested);
+                }
+            }
+            throw e;
+        }
+    }
+
+    private Duration getServerExpectedHeartbeatInterval()
+    {
+        String hiveServerTransactionTimeout = delegate.getConfigValue(HIVE_TXN_TIMEOUT.toString(), "300s");
+        return Duration.succinctNanos(toTime(hiveServerTransactionTimeout, getDefaultTimeUnit(HIVE_TXN_TIMEOUT), TimeUnit.NANOSECONDS) / 2);
+    }
+
+    public synchronized Optional<ValidTxnWriteIdList> getValidWriteIds(ConnectorSession session)
+    {
+        String queryId = session.getQueryId();
+        // Ensure concurrent queries are not running in the transaction. Handle cases where beginQuery is short circuited
+        checkState(!currentQueryId.isPresent() || currentQueryId.equals(Optional.of(queryId)),
+                "Invalid query id %s while current query is %s", queryId, currentQueryId);
+        return currentHiveTransaction.map(HiveTransaction::getValidWriteIds);
+    }
+
+    public synchronized void cleanupQuery(ConnectorSession session)
+    {
+        String queryId = session.getQueryId();
+        checkState(currentQueryId.equals(Optional.of(queryId)), "Invalid query id %s while current query is", queryId, currentQueryId);
+        Optional<HiveTransaction> transaction = currentHiveTransaction;
+        currentQueryId = Optional.empty();
+        currentHiveTransaction = Optional.empty();
+
+        if (!transaction.isPresent()) {
+            return;
+        }
+
+        long transactionId = transaction.get().getTransactionId();
+        ScheduledFuture<?> heartbeatTask = transaction.get().getHeartbeatTask();
+        boolean transactionValid = !heartbeatTask.isDone();
+        heartbeatTask.cancel(true);
+
+        // avoid race on HMS by waiting for heartbeat to complete
+        try {
+            heartbeatTask.get(5, SECONDS);
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
+        catch (CancellationException | TimeoutException | ExecutionException ignored) {
+        }
+
+        if (transactionValid) {
+            // TODO if query fails, we should rollback (it doesn't matter for read-only transaction, but will be necessary in the future)
+            log.debug("Committing Hive transaction %s for query %s", transactionId, queryId);
+            delegate.commitTransaction(transactionId);
+        }
+        else {
+            log.debug("Rolling back Hive transaction %s for query %s", transactionId, queryId);
+            delegate.rollbackTransaction(transactionId);
+
+            throw new PrestoException(HIVE_TABLE_TRANSACTION_ABORTED_BY_METASTORE, format("Hive transaction %s was aborted by Metastore", transactionId));
         }
     }
 

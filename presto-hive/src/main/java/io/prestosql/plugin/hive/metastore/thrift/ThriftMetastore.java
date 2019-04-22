@@ -146,4 +146,9 @@ public interface ThriftMetastore
     {
         throw new UnsupportedOperationException();
     }
+
+    default String getConfigValue(String name, String defaultValue)
+    {
+        return defaultValue;
+    }
 }

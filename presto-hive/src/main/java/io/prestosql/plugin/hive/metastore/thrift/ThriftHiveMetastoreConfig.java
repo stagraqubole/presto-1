@@ -21,6 +21,8 @@ import io.prestosql.plugin.hive.util.RetryDriver;
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
 
+import java.util.concurrent.TimeUnit;
+
 public class ThriftHiveMetastoreConfig
 {
     private int maxRetries = RetryDriver.DEFAULT_MAX_ATTEMPTS - 1;
@@ -28,6 +30,7 @@ public class ThriftHiveMetastoreConfig
     private Duration minBackoffDelay = RetryDriver.DEFAULT_SLEEP_TIME;
     private Duration maxBackoffDelay = RetryDriver.DEFAULT_SLEEP_TIME;
     private Duration maxRetryTime = RetryDriver.DEFAULT_MAX_RETRY_TIME;
+    private Duration maxWaitForTransactionLock = new Duration(10, TimeUnit.MINUTES);
 
     @Min(0)
     public int getMaxRetries()
@@ -93,6 +96,19 @@ public class ThriftHiveMetastoreConfig
     public ThriftHiveMetastoreConfig setMaxBackoffDelay(Duration maxBackoffDelay)
     {
         this.maxBackoffDelay = maxBackoffDelay;
+        return this;
+    }
+
+    public Duration getMaxWaitForTransactionLock()
+    {
+        return maxWaitForTransactionLock;
+    }
+
+    @Config("hive.metastore.thrift.txn-lock-max-wait")
+    @ConfigDescription("Maximum time to wait to acquire hive transaction lock")
+    public ThriftHiveMetastoreConfig setMaxWaitForTransactionLock(Duration maxWaitForTransactionLock)
+    {
+        this.maxWaitForTransactionLock = maxWaitForTransactionLock;
         return this;
     }
 }

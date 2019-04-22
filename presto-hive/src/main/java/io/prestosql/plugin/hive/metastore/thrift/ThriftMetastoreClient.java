@@ -13,17 +13,21 @@
  */
 package io.prestosql.plugin.hive.metastore.thrift;
 
+import org.apache.hadoop.hive.metastore.api.AllocateTableWriteIdsRequest;
 import org.apache.hadoop.hive.metastore.api.ColumnStatisticsObj;
 import org.apache.hadoop.hive.metastore.api.Database;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.HiveObjectPrivilege;
 import org.apache.hadoop.hive.metastore.api.HiveObjectRef;
+import org.apache.hadoop.hive.metastore.api.LockRequest;
+import org.apache.hadoop.hive.metastore.api.LockResponse;
 import org.apache.hadoop.hive.metastore.api.Partition;
 import org.apache.hadoop.hive.metastore.api.PrincipalType;
 import org.apache.hadoop.hive.metastore.api.PrivilegeBag;
 import org.apache.hadoop.hive.metastore.api.Role;
 import org.apache.hadoop.hive.metastore.api.RolePrincipalGrant;
 import org.apache.hadoop.hive.metastore.api.Table;
+import org.apache.hadoop.hive.metastore.api.TxnToWriteId;
 import org.apache.thrift.TException;
 
 import java.io.Closeable;
@@ -143,4 +147,58 @@ public interface ThriftMetastoreClient
 
     void setUGI(String userName)
             throws TException;
+
+    default long openTransaction(String user)
+            throws TException
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default void commitTransaction(long transactionId)
+            throws TException
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default void rollbackTransaction(long transactionId)
+            throws TException
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default boolean sendTransactionHeartbeatAndFindIfValid(long transaction)
+            throws TException
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default LockResponse acquireLock(LockRequest lockRequest)
+            throws TException
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default LockResponse checkLock(long lockId)
+            throws TException
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default String getValidWriteIds(List<String> tableList, long currentTransaction)
+            throws TException
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default List<TxnToWriteId> allocateTableWriteIds(AllocateTableWriteIdsRequest rqst)
+            throws TException
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default String get_config_value(String name, String defaultValue)
+            throws TException
+    {
+        throw new UnsupportedOperationException();
+    }
 }

@@ -33,6 +33,7 @@ import io.prestosql.spi.connector.ConnectorSplitManager;
 import javax.inject.Singleton;
 
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -41,6 +42,7 @@ import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.configuration.ConfigBinder.configBinder;
 import static io.airlift.json.JsonCodecBinder.jsonCodecBinder;
 import static java.util.concurrent.Executors.newCachedThreadPool;
+import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static org.weakref.jmx.guice.ExportBinder.newExporter;
 
 public class HiveModule
@@ -116,6 +118,16 @@ public class HiveModule
     public ExecutorService createHiveClientExecutor(HiveCatalogName catalogName)
     {
         return newCachedThreadPool(daemonThreadsNamed("hive-" + catalogName + "-%s"));
+    }
+
+    @ForHiveTransactionHeartbeats
+    @Singleton
+    @Provides
+    public ScheduledExecutorService createHiveTransactionHeartbeatExecutor(HiveCatalogName catalogName, HiveConfig hiveConfig)
+    {
+        return newScheduledThreadPool(
+                hiveConfig.getHiveTransactionHeartbeatThreads(),
+                daemonThreadsNamed("Hive-Heartbeat-" + catalogName + "-%s"));
     }
 
     @Singleton
