@@ -142,7 +142,8 @@ import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
 
 @Test(groups = "hive")
-public abstract class AbstractTestHiveFileFormats
+public abstract class
+AbstractTestHiveFileFormats
 {
     private static final double EPSILON = 0.001;
 
