@@ -13,6 +13,7 @@
  */
 package io.prestosql.plugin.hive.metastore.thrift;
 
+import io.prestosql.plugin.hive.HivePartition;
 import io.prestosql.plugin.hive.PartitionStatistics;
 import io.prestosql.plugin.hive.metastore.HivePrincipal;
 import io.prestosql.plugin.hive.metastore.HivePrivilegeInfo;
@@ -114,5 +115,35 @@ public interface ThriftMetastore
         }
 
         return Optional.of(table.get().getSd().getCols());
+    }
+
+    default long openTxn(String user)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default void commitTxn(long txnId)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default void rollbackTxn(long txnId)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default boolean sendTxnHeartBeatAndFindIfValid(long txn)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default void acquireSharedReadLock(String user, String queryId, long txn, Set<HivePartition> partitions)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default String getValidWriteIds(List<String> tableList, long currentTxn)
+    {
+        throw new UnsupportedOperationException();
     }
 }
