@@ -13,8 +13,10 @@
  */
 package io.prestosql.plugin.hive.metastore;
 
+import io.prestosql.plugin.hive.HivePartition;
 import io.prestosql.plugin.hive.HiveType;
 import io.prestosql.plugin.hive.PartitionStatistics;
+import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.spi.security.RoleGrant;
 import io.prestosql.spi.statistics.ColumnStatisticType;
 import io.prestosql.spi.type.Type;
@@ -105,4 +107,34 @@ public interface HiveMetastore
     void revokeTablePrivileges(String databaseName, String tableName, HivePrincipal grantee, Set<HivePrivilegeInfo> privileges);
 
     Set<HivePrivilegeInfo> listTablePrivileges(String databaseName, String tableName, HivePrincipal principal);
+
+    default long openTransaction(String user)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default void commitTransaction(long transactionId)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default void rollbackTransaction(long transactionId)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default boolean sendTransactionHeartbeatAndFindIfValid(long transaction)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default void acquireSharedReadLock(String user, String queryId, long transaction, List<SchemaTableName> fullTables, List<HivePartition> partitions)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default String getValidWriteIds(List<SchemaTableName> tables, long currentTransaction)
+    {
+        throw new UnsupportedOperationException();
+    }
 }
