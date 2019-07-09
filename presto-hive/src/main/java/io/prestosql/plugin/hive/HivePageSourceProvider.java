@@ -113,7 +113,8 @@ public class HivePageSourceProvider
                 typeManager,
                 hiveSplit.getColumnCoercions(),
                 hiveSplit.getBucketConversion(),
-                hiveSplit.isS3SelectPushdownEnabled());
+                hiveSplit.isS3SelectPushdownEnabled(),
+                hiveSplit.getDeleteDetlaLocations());
         if (pageSource.isPresent()) {
             return pageSource.get();
         }
@@ -138,7 +139,8 @@ public class HivePageSourceProvider
             TypeManager typeManager,
             Map<Integer, HiveType> columnCoercions,
             Optional<BucketConversion> bucketConversion,
-            boolean s3SelectPushdownEnabled)
+            boolean s3SelectPushdownEnabled,
+            Optional<DeleteDeltaLocations> deleteDeltaLocations)
     {
         List<ColumnMapping> columnMappings = ColumnMapping.buildColumnMappings(
                 partitionKeys,
@@ -171,7 +173,8 @@ public class HivePageSourceProvider
                     schema,
                     toColumnHandles(regularAndInterimColumnMappings, true),
                     effectivePredicate,
-                    hiveStorageTimeZone);
+                    hiveStorageTimeZone,
+                    deleteDeltaLocations);
             if (pageSource.isPresent()) {
                 return Optional.of(
                         new HivePageSource(
