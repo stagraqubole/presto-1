@@ -24,6 +24,7 @@ import io.prestosql.plugin.hive.HiveType;
 import io.prestosql.plugin.hive.HiveTypeName;
 import io.prestosql.plugin.hive.HiveTypeTranslator;
 import io.prestosql.plugin.hive.TypeTranslator;
+import io.prestosql.plugin.hive.orc.OrcPageSourceFactory;
 import io.prestosql.plugin.hive.orc.acid.ACIDOrcPageSourceFactory;
 import io.prestosql.spi.connector.ConnectorPageSource;
 import io.prestosql.spi.predicate.TupleDomain;
@@ -80,7 +81,8 @@ public class AcidPageProcessorProvider
         }
         List<HiveColumnHandle> columns = builder.build();
 
-        HivePageSourceFactory pageSourceFactory = new ACIDOrcPageSourceFactory(TYPE_MANAGER, HDFS_ENVIRONMENT, new FileFormatDataSourceStats());
+        OrcPageSourceFactory orcPageSourceFactory = new OrcPageSourceFactory(TYPE_MANAGER, CONFIG, HDFS_ENVIRONMENT, new FileFormatDataSourceStats());
+        HivePageSourceFactory pageSourceFactory = new ACIDOrcPageSourceFactory(TYPE_MANAGER, CONFIG, HDFS_ENVIRONMENT, new FileFormatDataSourceStats(), orcPageSourceFactory);
 
         Configuration config = new JobConf(new Configuration(false));
         config.set("fs.file.impl", "org.apache.hadoop.fs.RawLocalFileSystem");

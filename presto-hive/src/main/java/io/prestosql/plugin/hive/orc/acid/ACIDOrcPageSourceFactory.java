@@ -16,6 +16,7 @@ package io.prestosql.plugin.hive.orc.acid;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.units.DataSize;
+import io.airlift.units.Duration;
 import io.prestosql.memory.context.AggregatedMemoryContext;
 import io.prestosql.orc.OrcDataSource;
 import io.prestosql.orc.OrcDataSourceId;
@@ -28,10 +29,12 @@ import io.prestosql.plugin.hive.DeleteDeltaLocations;
 import io.prestosql.plugin.hive.FileFormatDataSourceStats;
 import io.prestosql.plugin.hive.HdfsEnvironment;
 import io.prestosql.plugin.hive.HiveColumnHandle;
+import io.prestosql.plugin.hive.HiveConfig;
 import io.prestosql.plugin.hive.HivePageSourceFactory;
 import io.prestosql.plugin.hive.HiveType;
 import io.prestosql.plugin.hive.orc.HdfsOrcDataSource;
 import io.prestosql.plugin.hive.orc.OrcPageSource;
+import io.prestosql.plugin.hive.orc.OrcPageSourceFactory;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.connector.ConnectorPageSource;
 import io.prestosql.spi.connector.ConnectorSession;
@@ -62,6 +65,7 @@ import static com.google.common.base.Strings.nullToEmpty;
 import static io.prestosql.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static io.prestosql.orc.OrcReader.INITIAL_BATCH_SIZE;
 import static io.prestosql.orc.TupleDomainOrcPredicate.ColumnReference;
+import static io.prestosql.plugin.hive.DeleteDeltaLocations.hasDeletedRows;
 import static io.prestosql.plugin.hive.HiveColumnHandle.ColumnType.REGULAR;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_BAD_DATA;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_CANNOT_OPEN_SPLIT;
@@ -85,13 +89,19 @@ public class ACIDOrcPageSourceFactory
     private final TypeManager typeManager;
     private final HdfsEnvironment hdfsEnvironment;
     private final FileFormatDataSourceStats stats;
+    private final OrcPageSourceFactory orcPageSourceFactory;
+    private final DataSize deletedRowsCacheSize;
+    private final Duration deletedRowsCacheTTL;
 
     @Inject
-    public ACIDOrcPageSourceFactory(TypeManager typeManager, HdfsEnvironment hdfsEnvironment, FileFormatDataSourceStats stats)
+    public ACIDOrcPageSourceFactory(TypeManager typeManager, HiveConfig config, HdfsEnvironment hdfsEnvironment, FileFormatDataSourceStats stats, OrcPageSourceFactory orcPageSourceFactory)
     {
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.stats = requireNonNull(stats, "stats is null");
+        this.orcPageSourceFactory = orcPageSourceFactory;
+        this.deletedRowsCacheSize = config.getDeleteDeltaCacheSize();
+        this.deletedRowsCacheTTL = config.getDeleteDeltaCacheTTL();
     }
 
     @Override
@@ -123,6 +133,7 @@ public class ACIDOrcPageSourceFactory
         }
 
         return Optional.of(createOrcPageSource(
+                orcPageSourceFactory,
                 hdfsEnvironment,
                 session.getUser(),
                 session,
@@ -142,10 +153,14 @@ public class ACIDOrcPageSourceFactory
                 getOrcMaxReadBlockSize(session),
                 getOrcLazyReadSmallRanges(session),
                 isOrcBloomFiltersEnabled(session),
-                stats));
+                stats,
+                deletedRowsCacheSize,
+                deletedRowsCacheTTL,
+                deleteDeltaLocations));
     }
 
     public static OrcPageSource createOrcPageSource(
+            OrcPageSourceFactory pageSourceFactory,
             HdfsEnvironment hdfsEnvironment,
             String sessionUser,
             ConnectorSession session,
@@ -165,7 +180,10 @@ public class ACIDOrcPageSourceFactory
             DataSize maxReadBlockSize,
             boolean lazyReadSmallRanges,
             boolean orcBloomFiltersEnabled,
-            FileFormatDataSourceStats stats)
+            FileFormatDataSourceStats stats,
+            DataSize deletedRowsCacheSize,
+            Duration deletedRowsCacheTTL,
+            Optional<DeleteDeltaLocations> deleteDeltaLocations)
     {
         OrcDataSource orcDataSource;
         try {
@@ -193,7 +211,10 @@ public class ACIDOrcPageSourceFactory
         try {
             OrcReader reader = new OrcReader(orcDataSource, maxMergeDistance, tinyStripeThreshold, maxReadBlockSize);
 
-            List<HiveColumnHandle> physicalColumns = getPhysicalHiveColumnHandlesACID(columns, reader, path);
+            // We need meta columns to created rowIds if there are delete deltas present
+            boolean metaColumnsNeeded = hasDeletedRows(deleteDeltaLocations);
+
+            List<HiveColumnHandle> physicalColumns = getPhysicalHiveColumnHandlesACID(columns, reader, path, metaColumnsNeeded);
             ImmutableMap.Builder<Integer, Type> includedColumns = ImmutableMap.builder();
             ImmutableList.Builder<ColumnReference<HiveColumnHandle>> columnReferences = ImmutableList.builder();
             for (HiveColumnHandle column : physicalColumns) {
@@ -233,12 +254,21 @@ public class ACIDOrcPageSourceFactory
                     true);
 
             return new ACIDOrcPageSource(
+                    path,
+                    pageSourceFactory,
+                    session,
+                    configuration,
+                    hiveStorageTimeZone,
+                    hdfsEnvironment,
                     recordReader,
                     orcDataSource,
                     physicalColumns,
                     typeManager,
                     systemMemoryUsage,
-                    stats);
+                    stats,
+                    deletedRowsCacheSize,
+                    deletedRowsCacheTTL,
+                    deleteDeltaLocations);
         }
         catch (Exception e) {
             try {
@@ -262,7 +292,7 @@ public class ACIDOrcPageSourceFactory
         return format("Error opening Hive split %s (offset=%s, length=%s): %s", path, start, length, t.getMessage());
     }
 
-    private static List<HiveColumnHandle> getPhysicalHiveColumnHandlesACID(List<HiveColumnHandle> columns, OrcReader reader, Path path)
+    private static List<HiveColumnHandle> getPhysicalHiveColumnHandlesACID(List<HiveColumnHandle> columns, OrcReader reader, Path path, boolean metaColumnsNeeded)
     {
         // Always use column names from reader for ACID files
 
@@ -273,40 +303,42 @@ public class ACIDOrcPageSourceFactory
 
         ImmutableList.Builder<HiveColumnHandle> physicalColumns = ImmutableList.builder();
         // Add all meta columns
-        for (Map.Entry<String, Integer> entry : physicalNameOrdinalMap.entrySet()) {
-            if (entry.getValue() > 4) {
-                // Data columns, skip in this step
-                continue;
-            }
+        if (metaColumnsNeeded) {
+            for (Map.Entry<String, Integer> entry : physicalNameOrdinalMap.entrySet()) {
+                if (entry.getValue() > 4) {
+                    // Data columns, skip in this step
+                    continue;
+                }
 
-            HiveType hiveType = null;
-            switch (entry.getKey()) {
-                case "operation":
-                    // not needed right now, rowId is made of only originalTxn, bucket and rowId
-                    continue;
-                case "originalTransaction":
-                    hiveType = HiveType.HIVE_LONG;
-                    break;
-                case "bucket":
-                    hiveType = HiveType.HIVE_INT;
-                    break;
-                case "rowId":
-                    hiveType = HiveType.HIVE_LONG;
-                    break;
-                case "currentTransaction":
-                    // not needed right now, rowId is made of only originalTxn, bucket and rowId
-                    continue;
-                default:
-                    // do nothing for other columns
-                    break;
+                HiveType hiveType = null;
+                switch (entry.getKey()) {
+                    case "operation":
+                        // not needed right now, rowId is made of only originalTxn, bucket and rowId
+                        continue;
+                    case "originalTransaction":
+                        hiveType = HiveType.HIVE_LONG;
+                        break;
+                    case "bucket":
+                        hiveType = HiveType.HIVE_INT;
+                        break;
+                    case "rowId":
+                        hiveType = HiveType.HIVE_LONG;
+                        break;
+                    case "currentTransaction":
+                        // not needed right now, rowId is made of only originalTxn, bucket and rowId
+                        continue;
+                    default:
+                        // do nothing for other columns
+                        break;
+                }
+                physicalColumns.add(new HiveColumnHandle(
+                        entry.getKey(),
+                        hiveType,
+                        hiveType.getTypeSignature(),
+                        entry.getValue(),
+                        REGULAR,
+                        Optional.empty()));
             }
-            physicalColumns.add(new HiveColumnHandle(
-                    entry.getKey(),
-                    hiveType,
-                    hiveType.getTypeSignature(),
-                    entry.getValue(),
-                    REGULAR,
-                    Optional.empty()));
         }
 
         for (HiveColumnHandle column : columns) {

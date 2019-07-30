@@ -16,6 +16,7 @@ package io.prestosql.plugin.hive.acid;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import io.prestosql.plugin.hive.DeleteDeltaLocations;
 import io.prestosql.plugin.hive.FileFormatDataSourceStats;
 import io.prestosql.plugin.hive.HiveColumnHandle;
 import io.prestosql.plugin.hive.HivePageSourceProvider;
@@ -24,6 +25,7 @@ import io.prestosql.plugin.hive.HiveTableHandle;
 import io.prestosql.plugin.hive.HiveTransactionHandle;
 import io.prestosql.plugin.hive.HiveType;
 import io.prestosql.plugin.hive.HiveTypeTranslator;
+import io.prestosql.plugin.hive.orc.OrcPageSourceFactory;
 import io.prestosql.plugin.hive.orc.acid.ACIDOrcPageSourceFactory;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ConnectorPageSource;
@@ -42,10 +44,10 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Properties;
 
-import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
 import static io.prestosql.plugin.hive.HiveTestUtils.HDFS_ENVIRONMENT;
 import static io.prestosql.plugin.hive.HiveTestUtils.SESSION;
 import static io.prestosql.plugin.hive.HiveTestUtils.TYPE_MANAGER;
+import static io.prestosql.plugin.hive.acid.AcidNationRow.addNationTableDeleteDeltas;
 import static io.prestosql.plugin.hive.acid.AcidNationRow.getExpectedResult;
 import static io.prestosql.plugin.hive.acid.AcidNationRow.readFileCols;
 import static io.prestosql.plugin.hive.acid.AcidPageProcessorProvider.CONFIG;
@@ -67,10 +69,11 @@ public class TestHivePageSourceProvider
     public void testACIDTableWithoutDeletedRows()
             throws IOException
     {
-        ACIDOrcPageSourceFactory acidOrcPageSourceFactory = new ACIDOrcPageSourceFactory(TYPE_MANAGER, HDFS_ENVIRONMENT, new FileFormatDataSourceStats());
+        OrcPageSourceFactory orcPageSourceFactory = new OrcPageSourceFactory(TYPE_MANAGER, CONFIG, HDFS_ENVIRONMENT, new FileFormatDataSourceStats());
+        ACIDOrcPageSourceFactory acidOrcPageSourceFactory = new ACIDOrcPageSourceFactory(TYPE_MANAGER, CONFIG, HDFS_ENVIRONMENT, new FileFormatDataSourceStats(), orcPageSourceFactory);
         HivePageSourceProvider pageSourceProvider = new HivePageSourceProvider(CONFIG, HDFS_ENVIRONMENT, ImmutableSet.of(), ImmutableSet.of(acidOrcPageSourceFactory), TYPE_MANAGER);
 
-        HiveSplit split = createHiveSplit();
+        HiveSplit split = createHiveSplit(Optional.empty());
         HiveTableHandle table = new HiveTableHandle("test", "test", ImmutableList.of(), Optional.empty());
         ConnectorPageSource pageSource = pageSourceProvider.createPageSource(new HiveTransactionHandle(), SESSION, split, table, getColumnHandles());
         // readFileCols adds isValid, remove it from passed columns before calling
@@ -85,7 +88,39 @@ public class TestHivePageSourceProvider
         }
         assertTrue(validRows == 25000, "Unexpected number of valid rows read: " + validRows);
 
-        List<AcidNationRow> expected = getExpectedResult(Optional.empty(), Optional.empty());
+        List<AcidNationRow> expected = getExpectedResult(Optional.empty(), Optional.empty(), Optional.empty());
+        assertTrue(Objects.equals(expected, rows));
+    }
+
+    @Test
+    public void testACIDTableWithDeletedRows()
+            throws IOException
+    {
+        DeleteDeltaLocations deleteDeltaLocations = new DeleteDeltaLocations();
+        addNationTableDeleteDeltas(deleteDeltaLocations, 3L, 3L, 0);
+        addNationTableDeleteDeltas(deleteDeltaLocations, 4L, 4L, 0);
+
+        OrcPageSourceFactory orcPageSourceFactory = new OrcPageSourceFactory(TYPE_MANAGER, CONFIG, HDFS_ENVIRONMENT, new FileFormatDataSourceStats());
+        ACIDOrcPageSourceFactory acidOrcPageSourceFactory = new ACIDOrcPageSourceFactory(TYPE_MANAGER, CONFIG, HDFS_ENVIRONMENT, new FileFormatDataSourceStats(), orcPageSourceFactory);
+        HivePageSourceProvider pageSourceProvider = new HivePageSourceProvider(CONFIG, HDFS_ENVIRONMENT, ImmutableSet.of(), ImmutableSet.of(acidOrcPageSourceFactory), TYPE_MANAGER);
+
+        HiveSplit split = createHiveSplit(Optional.of(deleteDeltaLocations));
+        HiveTableHandle table = new HiveTableHandle("test", "test", ImmutableList.of(), Optional.empty());
+        ConnectorPageSource pageSource = pageSourceProvider.createPageSource(new HiveTransactionHandle(), SESSION, split, table, getColumnHandles());
+        // readFileCols adds isValid, remove it from passed columns before calling
+        List<AcidNationRow> rows = readFileCols(pageSource, columnNames.subList(0, columnNames.size() - 1), columnTypes.subList(0, columnTypes.size() - 1), true);
+
+        assertTrue(rows.size() == 25000, "Unexpected number of rows read: " + rows.size());
+        // Out of 25k rows, 2k rows are deleted as per the given delete deltas
+        int validRows = 0;
+        for (AcidNationRow row : rows) {
+            if (row.isValid) {
+                validRows++;
+            }
+        }
+        assertTrue(validRows == 23000, "Unexpected number of valid rows read: " + validRows);
+
+        List<AcidNationRow> expected = getExpectedResult(Optional.empty(), Optional.empty(), Optional.of(ImmutableList.of(5, 19)));
         assertTrue(Objects.equals(expected, rows));
     }
 
@@ -105,7 +140,7 @@ public class TestHivePageSourceProvider
         return builder.build();
     }
 
-    private HiveSplit createHiveSplit()
+    private HiveSplit createHiveSplit(Optional<DeleteDeltaLocations> deleteDeltaLocations)
             throws IOException
     {
         Configuration config = new JobConf(new Configuration(false));
@@ -128,7 +163,7 @@ public class TestHivePageSourceProvider
                 ImmutableMap.of(),
                 Optional.empty(),
                 false,
-                Optional.empty());
+                deleteDeltaLocations);
     }
 
     private Properties createSchema()
