@@ -2,7 +2,7 @@ version: '2'
 
 services:
   hadoop-master:
-    image: 'shubhamtagra/hdp3.1-hive:1'
+    image: 'prestodev/hdp3.1-hive'
     hostname: hadoop-master
     ports:
       - '${HIVE_PROXY_PORT}:1180'
