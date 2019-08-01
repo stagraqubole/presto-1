@@ -137,12 +137,12 @@ public interface ThriftMetastore
         throw new UnsupportedOperationException();
     }
 
-    default void acquireSharedReadLock(String user, String queryId, long transaction, Set<HivePartition> partitions)
+    default void acquireSharedReadLock(String user, String queryId, long txn, List<SchemaTableName> fullTables, List<HivePartition> partitions)
     {
         throw new UnsupportedOperationException();
     }
 
-    default String getValidWriteIds(List<String> tableList, long currentTransaction)
+    default String getValidWriteIds(List<SchemaTableName> tables, long currentTxn)
     {
         throw new UnsupportedOperationException();
     }

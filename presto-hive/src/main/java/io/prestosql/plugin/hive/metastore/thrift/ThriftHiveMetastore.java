@@ -52,6 +52,7 @@ import org.apache.hadoop.hive.metastore.api.HiveObjectRef;
 import org.apache.hadoop.hive.metastore.api.InvalidInputException;
 import org.apache.hadoop.hive.metastore.api.InvalidObjectException;
 import org.apache.hadoop.hive.metastore.api.InvalidOperationException;
+import org.apache.hadoop.hive.metastore.api.LockComponent;
 import org.apache.hadoop.hive.metastore.api.LockRequest;
 import org.apache.hadoop.hive.metastore.api.LockResponse;
 import org.apache.hadoop.hive.metastore.api.LockState;
@@ -106,7 +107,9 @@ import static io.prestosql.spi.StandardErrorCode.ALREADY_EXISTS;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.prestosql.spi.security.PrincipalType.USER;
 import static java.lang.String.format;
+import static java.lang.System.nanoTime;
 import static java.util.Objects.requireNonNull;
+import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.stream.Collectors.toSet;
 import static org.apache.hadoop.hive.common.FileUtils.makePartName;
 import static org.apache.hadoop.hive.metastore.api.HiveObjectType.TABLE;
@@ -1405,45 +1408,60 @@ public class ThriftHiveMetastore
     }
 
     @Override
-    public void acquireSharedReadLock(String user, String queryId, long transaction, Set<HivePartition> partitions)
+    public void acquireSharedReadLock(String user, String queryId, long hiveTransactionId, List<SchemaTableName> fullTables, List<HivePartition> partitions)
     {
-        checkArgument(user != null && !user.isEmpty(), "User should be provieded to open transaction");
-        checkArgument(queryId != null, "QueryID should not be null");
-        checkArgument(partitions != null, "Partitions set is required");
+        requireNonNull(user, "user is null");
+        requireNonNull(queryId, "queryId is null");
 
-        if (partitions.isEmpty()) {
+        if (fullTables.isEmpty() && partitions.isEmpty()) {
             return;
         }
 
-        LockRequestBuilder rqstBuilder = new LockRequestBuilder(queryId);
-        rqstBuilder.setTransactionId(transaction)
+        LockRequestBuilder request = new LockRequestBuilder(queryId)
+                .setTransactionId(hiveTransactionId)
                 .setUser(user);
 
-        for (HivePartition partition : partitions) {
-            LockComponentBuilder compBuilder = new LockComponentBuilder();
-            compBuilder.setShared();
-            compBuilder.setOperationType(DataOperationType.SELECT);
-
-            compBuilder.setDbName(partition.getTableName().getSchemaName());
-            compBuilder.setTableName(partition.getTableName().getTableName());
-            compBuilder.setPartitionName(partition.getPartitionId());
-
-            // acquire locks are called only for TransactionalTable
-            compBuilder.setIsTransactional(true);
-            rqstBuilder.addLockComponent(compBuilder.build());
+        for (SchemaTableName table : fullTables) {
+            request.addLockComponent(createLockComponentForRead(table, Optional.empty()));
         }
 
-        LockRequest lockRequest = rqstBuilder.build();
-        LockResponse response;
+        for (HivePartition partition : partitions) {
+            request.addLockComponent(createLockComponentForRead(partition.getTableName(), Optional.of(partition.getPartitionId())));
+        }
+
+        LockRequest lockRequest = request.build();
         try {
-            response = retry()
+            LockResponse response = retry()
                     .stopOnIllegalExceptions()
-                    .run("openTransaction", stats.getAcquireLocks().wrap(() -> {
+                    .run("acquireLock", stats.getAcquireLock().wrap(() -> {
                         try (ThriftMetastoreClient metastoreClient = clientProvider.createMetastoreClient()) {
-                            LockResponse res = metastoreClient.acquireLock(lockRequest);
-                            return res;
+                            return metastoreClient.acquireLock(lockRequest);
                         }
                     }));
+
+            long waitStart = nanoTime();
+            while (response.getState() == LockState.WAITING) {
+                long lockId = response.getLockid();
+
+                if (nanoTime() - waitStart > MINUTES.toNanos(10)) { // TODO make timeout configurable
+                    // timed out
+                    throw new PrestoException(HIVE_TABLE_LOCK_NOT_ACQUIRED, format("Timed out waiting for lock %d in hive transaction %s for query %s", lockId, hiveTransactionId, queryId));
+                }
+
+                // TODO add logging for waiting
+
+                response = retry()
+                        .stopOnIllegalExceptions()
+                        .run("checkLock", stats.getCheckLock().wrap(() -> {
+                            try (ThriftMetastoreClient metastoreClient = clientProvider.createMetastoreClient()) {
+                                return metastoreClient.checkLock(lockId);
+                            }
+                        }));
+            }
+
+            if (response.getState() != LockState.ACQUIRED) {
+                throw new PrestoException(HIVE_TABLE_LOCK_NOT_ACQUIRED, "Could not acquire lock. Lock in state " + response.getState());
+            }
         }
         catch (TException e) {
             throw new PrestoException(HIVE_METASTORE_ERROR, e);
@@ -1451,47 +1469,39 @@ public class ThriftHiveMetastore
         catch (Exception e) {
             throw propagate(e);
         }
+    }
 
-        // Retry for WAITING state
-        if (response.getState() == LockState.WAITING) {
-            final long lockId = response.getLockid();
-            try {
-                // Create new retry which does not fail on PrestoException
-                response = RetryDriver.retry()
-                        .stopOnIllegalExceptions()
-                        .run("openTransaction", stats.getCheckLocks().wrap(() -> {
-                            try (ThriftMetastoreClient metastoreClient = clientProvider.createMetastoreClient()) {
-                                LockResponse res = metastoreClient.checkLock(lockId);
-                                if (res.getState() == LockState.WAITING) {
-                                    // throw exception to retry
-                                    throw new PrestoException(HIVE_TABLE_LOCK_NOT_ACQUIRED, "Lock in WAITING state");
-                                }
-                                return res;
-                            }
-                        }));
-            }
-            catch (TException e) {
-                throw new PrestoException(HIVE_METASTORE_ERROR, e);
-            }
-            catch (Exception e) {
-                throw propagate(e);
-            }
-        }
+    private static LockComponent createLockComponentForRead(SchemaTableName table, Optional<String> partitionName)
+    {
+        requireNonNull(table, "table is null");
+        requireNonNull(partitionName, "partitionName is null");
 
-        if (response.getState() != LockState.ACQUIRED) {
-            throw new PrestoException(HIVE_TABLE_LOCK_NOT_ACQUIRED, "Lock in state " + response.getState());
-        }
+        LockComponentBuilder builder = new LockComponentBuilder();
+        builder.setShared();
+        builder.setOperationType(DataOperationType.SELECT);
+
+        builder.setDbName(table.getSchemaName());
+        builder.setTableName(table.getTableName());
+        requireNonNull(partitionName, "partitionName is null").ifPresent(builder::setPartitionName);
+
+        // acquire locks is called only for TransactionalTable
+        builder.setIsTransactional(true);
+        return builder.build();
     }
 
     @Override
-    public String getValidWriteIds(List<String> tableList, long currentTransaction)
+    public String getValidWriteIds(List<SchemaTableName> tables, long currentTxn)
     {
         try {
             return retry()
                     .stopOnIllegalExceptions()
                     .run("getValidWriteIds", stats.getValidWriteIds().wrap(() -> {
                         try (ThriftMetastoreClient metastoreClient = clientProvider.createMetastoreClient()) {
-                            return metastoreClient.getValidWriteIds(tableList, currentTransaction);
+                            return metastoreClient.getValidWriteIds(
+                                    tables.stream()
+                                            .map(table -> format("%s.%s", table.getSchemaName(), table.getTableName()))
+                                            .collect(toImmutableList()),
+                                    currentTxn);
                         }
                     }));
         }

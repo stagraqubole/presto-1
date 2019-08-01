@@ -28,6 +28,7 @@ import io.prestosql.plugin.hive.HivePartition;
 import io.prestosql.plugin.hive.HiveType;
 import io.prestosql.plugin.hive.PartitionStatistics;
 import io.prestosql.spi.PrestoException;
+import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.spi.security.RoleGrant;
 import io.prestosql.spi.statistics.ColumnStatisticType;
 import io.prestosql.spi.type.Type;
@@ -770,15 +771,15 @@ public class CachingHiveMetastore
     }
 
     @Override
-    public void acquireSharedReadLock(String user, String queryId, long transaction, Set<HivePartition> partitions)
+    public void acquireSharedReadLock(String user, String queryId, long txn, List<SchemaTableName> fullTables, List<HivePartition> partitions)
     {
-        delegate.acquireSharedReadLock(user, queryId, transaction, partitions);
+        delegate.acquireSharedReadLock(user, queryId, txn, fullTables, partitions);
     }
 
     @Override
-    public String getValidWriteIds(List<String> tableList, long currentTransaction)
+    public String getValidWriteIds(List<SchemaTableName> tables, long currentTxn)
     {
-        return delegate.getValidWriteIds(tableList, currentTransaction);
+        return delegate.getValidWriteIds(tables, currentTxn);
     }
 
     public Set<HivePrivilegeInfo> loadTablePrivileges(String databaseName, String tableName, HivePrincipal principal)

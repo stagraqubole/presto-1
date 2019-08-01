@@ -408,14 +408,14 @@ public class BridgingHiveMetastore
     }
 
     @Override
-    public void acquireSharedReadLock(String user, String queryId, long transaction, Set<HivePartition> partitions)
+    public void acquireSharedReadLock(String user, String queryId, long txn, List<SchemaTableName> fullTables, List<HivePartition> partitions)
     {
-        delegate.acquireSharedReadLock(user, queryId, transaction, partitions);
+        delegate.acquireSharedReadLock(user, queryId, txn, fullTables, partitions);
     }
 
     @Override
-    public String getValidWriteIds(List<String> tableList, long currentTransaction)
+    public String getValidWriteIds(List<SchemaTableName> tables, long currentTxn)
     {
-        return delegate.getValidWriteIds(tableList, currentTransaction);
+        return delegate.getValidWriteIds(tables, currentTxn);
     }
 }

@@ -86,6 +86,7 @@ import io.prestosql.spi.type.VarcharType;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.metastore.TableType;
 import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
+import org.apache.hadoop.hive.ql.io.AcidUtils;
 import org.apache.hadoop.hive.serde2.OpenCSVSerde;
 import org.apache.hadoop.mapred.JobConf;
 import org.joda.time.DateTimeZone;
@@ -314,6 +315,11 @@ public class HiveMetadata
         }
 
         verifyOnline(tableName, Optional.empty(), getProtectMode(table.get()), table.get().getParameters());
+
+        if (AcidUtils.isFullAcidTable(table.get().getParameters())) {
+            throw new PrestoException(NOT_SUPPORTED, "Reading from Full ACID table is not supported: " + tableName);
+        }
+
         return new HiveTableHandle(
                 tableName.getSchemaName(),
                 tableName.getTableName(),
@@ -1729,9 +1735,6 @@ public class HiveMetadata
 
         HivePartitionResult partitionResult = partitionManager.getPartitions(metastore, handle, constraint);
         HiveTableHandle newHandle = partitionManager.applyPartitionResult(handle, partitionResult);
-        if (newHandle.getPartitions().isPresent()) {
-            metastore.partitionsToBeRead(handle, newHandle.getPartitions().get());
-        }
 
         if (handle.getPartitions().equals(newHandle.getPartitions()) &&
                 handle.getCompactEffectivePredicate().equals(newHandle.getCompactEffectivePredicate()) &&
@@ -2217,9 +2220,13 @@ public class HiveMetadata
     }
 
     @Override
-    public void beginQuery(ConnectorSession session)
+    public void beginQuery(ConnectorSession session, Collection<ConnectorTableHandle> tableHandles)
     {
-        metastore.beginQuery(session);
+        metastore.beginQuery(
+                session,
+                tableHandles.stream()
+                        .map(HiveTableHandle.class::cast)
+                        .collect(toImmutableList()));
     }
 
     @Override

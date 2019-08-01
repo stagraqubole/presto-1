@@ -123,7 +123,7 @@ public class BackgroundHiveSplitLoader
     private final ConnectorSession session;
     private final ConcurrentLazyQueue<HivePartitionMetadata> partitions;
     private final Deque<Iterator<InternalHiveSplit>> fileIterators = new ConcurrentLinkedDeque<>();
-    private final String validWriteIds;
+    private final Optional<ValidTxnWriteIdList> validWriteIds;
 
     // Purpose of this lock:
     // * Write lock: when you need a consistent view across partitions, fileIterators, and hiveSplitSource.
@@ -157,7 +157,7 @@ public class BackgroundHiveSplitLoader
             Executor executor,
             int loaderConcurrency,
             boolean recursiveDirWalkerEnabled,
-            String validWriteIds)
+            Optional<ValidTxnWriteIdList> validWriteIds)
     {
         this.table = table;
         this.compactEffectivePredicate = compactEffectivePredicate;
@@ -171,7 +171,7 @@ public class BackgroundHiveSplitLoader
         this.executor = executor;
         this.partitions = new ConcurrentLazyQueue<>(partitions);
         this.hdfsContext = new HdfsContext(session, table.getDatabaseName(), table.getTableName());
-        this.validWriteIds = validWriteIds;
+        this.validWriteIds = requireNonNull(validWriteIds, "validWriteIds is null");
     }
 
     @Override
@@ -403,9 +403,8 @@ public class BackgroundHiveSplitLoader
             AcidUtils.Directory directory = AcidUtils.getAcidState(
                     path,
                     configuration,
-                    new ValidTxnWriteIdList(validWriteIds)
-                            .getTableValidWriteIdList(
-                                    table.getDatabaseName() + "." + table.getTableName()),
+                    validWriteIds.orElseThrow(() -> new IllegalStateException("No validWriteIds present"))
+                            .getTableValidWriteIdList(table.getDatabaseName() + "." + table.getTableName()),
                     false,
                     true);
             // delta directories
