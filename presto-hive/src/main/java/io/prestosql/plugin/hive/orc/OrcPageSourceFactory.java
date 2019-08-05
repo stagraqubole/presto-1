@@ -211,7 +211,8 @@ public class OrcPageSourceFactory
                     length,
                     hiveStorageTimeZone,
                     systemMemoryUsage,
-                    INITIAL_BATCH_SIZE);
+                    INITIAL_BATCH_SIZE,
+                    false);
 
             return new OrcPageSource(
                     recordReader,
