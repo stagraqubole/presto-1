@@ -118,7 +118,7 @@ public class TestPartitionedInsertOnlyAcidTable
                 String.format("CREATE TABLE %s (col string) stored as ORC TBLPROPERTIES ('transactional'='true')",
                 fullAcidTable));
         assertThat(() -> query("SELECT * FROM " + fullAcidTable))
-                .failsWithMessage("Reading from Full Acid tables are not supported: default." + fullAcidTable);
+                .failsWithMessageMatching("java.sql.SQLException: Query failed (.*): Reading from Full ACID table is not supported: default." + fullAcidTable);
     }
 
     @Test(groups = {HIVE_Acid, PROFILE_SPECIFIC_TESTS})
