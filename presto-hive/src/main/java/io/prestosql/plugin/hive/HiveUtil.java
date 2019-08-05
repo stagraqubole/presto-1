@@ -48,6 +48,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.common.JavaUtils;
 import org.apache.hadoop.hive.ql.exec.Utilities;
+import org.apache.hadoop.hive.ql.io.AcidUtils;
 import org.apache.hadoop.hive.ql.io.IOConstants;
 import org.apache.hadoop.hive.ql.io.SymlinkTextInputFormat;
 import org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat;
@@ -102,6 +103,7 @@ import static com.google.common.collect.Lists.newArrayList;
 import static com.google.common.collect.Lists.transform;
 import static io.prestosql.plugin.hive.HiveColumnHandle.ColumnType.PARTITION_KEY;
 import static io.prestosql.plugin.hive.HiveColumnHandle.ColumnType.REGULAR;
+import static io.prestosql.plugin.hive.HiveColumnHandle.acidRowValidityColumnHandle;
 import static io.prestosql.plugin.hive.HiveColumnHandle.bucketColumnHandle;
 import static io.prestosql.plugin.hive.HiveColumnHandle.isBucketColumnHandle;
 import static io.prestosql.plugin.hive.HiveColumnHandle.isPathColumnHandle;
@@ -834,6 +836,11 @@ public final class HiveUtil
         columns.add(pathColumnHandle());
         if (table.getStorage().getBucketProperty().isPresent()) {
             columns.add(bucketColumnHandle());
+        }
+
+        // add isValid column for Acid tables
+        if (AcidUtils.isFullAcidTable(table.getParameters())) {
+            columns.add(acidRowValidityColumnHandle());
         }
 
         return columns.build();
