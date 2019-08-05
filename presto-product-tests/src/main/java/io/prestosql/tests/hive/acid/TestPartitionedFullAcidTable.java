@@ -37,11 +37,11 @@ import static io.prestosql.tests.TestGroups.HIVE_ACID;
 import static io.prestosql.tests.TestGroups.PROFILE_SPECIFIC_TESTS;
 import static io.prestosql.tests.hive.acid.AcidTestHelper.simulateAbortedHiveTranscation;
 
-public class TestPartitionedInsertOnlyAcidTable
+public class TestPartitionedFullAcidTable
         extends ProductTest
         implements RequirementsProvider
 {
-    private static String tableName = "ORC_acid_single_int_column_partitioned";
+    private static String tableName = "ORC_acid_single_int_column_partitioned_fullacid";
 
     private static final HiveTableDefinition SINGLE_INT_COLUMN_PARTITIONED_ORC = singleIntColumnPartitionedTableDefinition(Optional.empty());
 
@@ -57,14 +57,15 @@ public class TestPartitionedInsertOnlyAcidTable
     {
         StringBuilder sb = new StringBuilder();
         sb.append("CREATE %EXTERNAL% TABLE IF NOT EXISTS %NAME%(");
-        sb.append("   col INT");
+        sb.append("   col INT,");
+        sb.append("   fcol INT");
         sb.append(") ");
         sb.append("PARTITIONED BY (part_col INT) ");
         if (rowFormat.isPresent()) {
             sb.append("ROW FORMAT ").append(rowFormat.get());
         }
         sb.append(" STORED AS ORC");
-        sb.append(" TBLPROPERTIES ('transactional_properties'='insert_only', 'transactional'='true')");
+        sb.append(" TBLPROPERTIES ('transactional'='true')");
         return sb.toString();
     }
 
@@ -84,21 +85,34 @@ public class TestPartitionedInsertOnlyAcidTable
 
         QueryExecutor hiveQueryExecutor = ThreadLocalTestContextHolder.testContext().getDependency(QueryExecutor.class, "hive");
         hiveQueryExecutor.executeQuery(
-                "INSERT OVERWRITE TABLE " + tableNameInDatabase + " PARTITION (part_col=2) select 1");
+                "INSERT OVERWRITE TABLE " + tableNameInDatabase + " PARTITION (part_col=2) select 21, 1");
+        hiveQueryExecutor.executeQuery(
+                "INSERT OVERWRITE TABLE " + tableNameInDatabase + " PARTITION (part_col=1) select 11, 1");
 
         String selectFromOnePartitionsSql = "SELECT * FROM " + tableNameInDatabase + " WHERE part_col = 2";
         QueryResult onePartitionQueryResult = query(selectFromOnePartitionsSql);
-        assertThat(onePartitionQueryResult).containsOnly(row(1, 2));
+        assertThat(onePartitionQueryResult).containsOnly(row(21, 1, 2));
 
         hiveQueryExecutor.executeQuery(
-                "INSERT INTO TABLE " + tableNameInDatabase + " PARTITION (part_col=2) select 2");
+                "INSERT INTO TABLE " + tableNameInDatabase + " PARTITION (part_col=2) select 22, 2");
         onePartitionQueryResult = query(selectFromOnePartitionsSql);
         assertThat(onePartitionQueryResult).hasRowsCount(2);
 
+        // test filtering
+        onePartitionQueryResult = query(selectFromOnePartitionsSql + " AND fcol = 1");
+        assertThat(onePartitionQueryResult).containsOnly(row(21, 1, 2));
+
+        // delete a row
         hiveQueryExecutor.executeQuery(
-                "INSERT OVERWRITE TABLE " + tableNameInDatabase + " PARTITION (part_col=2) select 3");
+                "DELETE FROM " + tableNameInDatabase + " where part_col=2 and fcol=2");
         onePartitionQueryResult = query(selectFromOnePartitionsSql);
-        assertThat(onePartitionQueryResult).containsOnly(row(3, 2));
+        assertThat(onePartitionQueryResult).containsOnly(row(21, 1, 2));
+
+        // update the existing row
+        hiveQueryExecutor.executeQuery(
+                "UPDATE " + tableNameInDatabase + " set col = 23 where part_col=2 and fcol=1");
+        onePartitionQueryResult = query(selectFromOnePartitionsSql);
+        assertThat(onePartitionQueryResult).containsOnly(row(23, 1, 2));
     }
 
     @Test(groups = {HIVE_ACID, PROFILE_SPECIFIC_TESTS})
@@ -108,22 +122,13 @@ public class TestPartitionedInsertOnlyAcidTable
         String tableNameInDatabase = tablesState.get(tableName).getNameInDatabase();
         String databaseName = "default";
 
-        QueryExecutor hiveQueryExecutor = ThreadLocalTestContextHolder.testContext().getDependency(QueryExecutor.class, "hive");
-        hiveQueryExecutor.executeQuery(
-                "INSERT INTO TABLE " + tableNameInDatabase + " PARTITION (part_col=2) select 0");
-
-        hiveQueryExecutor.executeQuery(
-                "INSERT OVERWRITE TABLE " + tableNameInDatabase + " PARTITION (part_col=2) select 1");
-
-        String selectFromOnePartitionsSql = "SELECT * FROM " + tableNameInDatabase + " WHERE part_col = 2";
-        QueryResult onePartitionQueryResult = query(selectFromOnePartitionsSql);
-        assertThat(onePartitionQueryResult).containsOnly(row(1, 2));
+        // Normal test have some data
+        testReadingPartitionedInsertOnlyAcidTable();
 
         // Simulate aborted transaction in Hive which has left behind a write directory and file
         simulateAbortedHiveTranscation(databaseName, tableNameInDatabase, "part_col=2");
 
         // Above simluation would have written to the part_col a new delta directory that corresponds to a aborted transaction but it should not be read
-        onePartitionQueryResult = query(selectFromOnePartitionsSql);
-        assertThat(onePartitionQueryResult).containsOnly(row(1, 2));
+        assertThat(query("SELECT * FROM " + tableNameInDatabase + " WHERE part_col = 2")).containsOnly(row(23, 1, 2));
     }
 }
