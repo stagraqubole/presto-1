@@ -13,6 +13,7 @@
  */
 package io.prestosql.plugin.hive.orc;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import io.prestosql.memory.context.AggregatedMemoryContext;
 import io.prestosql.orc.OrcCorruptionException;
@@ -47,7 +48,7 @@ public class OrcPageSource
         implements ConnectorPageSource
 {
     private static final int NULL_ENTRY_SIZE = 0;
-    private final OrcRecordReader recordReader;
+    protected final OrcRecordReader recordReader;
     private final OrcDataSource orcDataSource;
 
     private final List<String> columnNames;
@@ -204,6 +205,12 @@ public class OrcPageSource
                 throwable.addSuppressed(e);
             }
         }
+    }
+
+    @VisibleForTesting
+    public OrcRecordReader getRecordReader()
+    {
+        return recordReader;
     }
 
     private final class OrcBlockLoader
