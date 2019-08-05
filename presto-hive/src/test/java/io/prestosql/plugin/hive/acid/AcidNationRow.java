@@ -15,12 +15,16 @@ package io.prestosql.plugin.hive.acid;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import io.prestosql.plugin.hive.DeleteDeltaLocations;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.connector.ConnectorPageSource;
 import io.prestosql.spi.type.BooleanType;
 import io.prestosql.spi.type.Type;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hive.ql.io.AcidUtils;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -120,7 +124,7 @@ public class AcidNationRow
      *
      * If onlyForRowId is provided, then only that row from nation.tbls is read and exploded and others are ignored
      */
-    public static List<AcidNationRow> getExpectedResult(Optional<Integer> onlyForRowId, Optional<Integer> onlyForColumnId)
+    public static List<AcidNationRow> getExpectedResult(Optional<Integer> onlyForRowId, Optional<Integer> onlyForColumnId, Optional<List<Integer>> invalidRows)
             throws IOException
     {
         String nationFilePath = Thread.currentThread().getContextClassLoader().getResource("nation.tbl").getPath();
@@ -135,7 +139,11 @@ public class AcidNationRow
                 if (onlyForRowId.isPresent() && onlyForRowId.get() != lineNum) {
                     continue;
                 }
-                rowId += replicateIntoResult(line, result, rowId, onlyForColumnId);
+                boolean isValid = true;
+                if (invalidRows.isPresent() && invalidRows.get().contains(lineNum)) {
+                    isValid = false;
+                }
+                rowId += replicateIntoResult(line, result, rowId, onlyForColumnId, isValid);
             }
         }
         finally {
@@ -144,7 +152,7 @@ public class AcidNationRow
         return result.build();
     }
 
-    public static long replicateIntoResult(String line, ImmutableList.Builder<AcidNationRow> resultBuilder, long startRowId, Optional<Integer> onlyForColumnId)
+    public static long replicateIntoResult(String line, ImmutableList.Builder<AcidNationRow> resultBuilder, long startRowId, Optional<Integer> onlyForColumnId, boolean isValid)
     {
         long replicationFactor = 1000; // same way the nationFile25kRowsSortedOnNationKey.orc is created
         for (int i = 0; i < replicationFactor; i++) {
@@ -154,8 +162,16 @@ public class AcidNationRow
                     (!onlyForColumnId.isPresent() || onlyForColumnId.get() == 1) ? cols[1] : "INVALID",
                     (!onlyForColumnId.isPresent() || onlyForColumnId.get() == 2) ? Integer.parseInt(cols[2]) : -1,
                     (!onlyForColumnId.isPresent() || onlyForColumnId.get() == 3) ? cols[3] : "INVALID",
-                    true));
+                    isValid));
         }
         return replicationFactor;
+    }
+
+    public static void addNationTableDeleteDeltas(DeleteDeltaLocations deleteDeltaLocations, long minWriteId, long maxWriteId, int statementId)
+    {
+        // ClassLoader finds top level resources, find that and build delta locations from it
+        File partitionLocation = new File((Thread.currentThread().getContextClassLoader().getResource("nation_delete_deltas").getPath()));
+        Path deleteDeltaPath = new Path(new Path(partitionLocation.toString()), AcidUtils.deleteDeltaSubdir(minWriteId, maxWriteId, statementId));
+        deleteDeltaLocations.addDeleteDelta(deleteDeltaPath, minWriteId, maxWriteId, statementId);
     }
 }

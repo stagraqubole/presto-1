@@ -14,38 +14,73 @@
 package io.prestosql.plugin.hive.orc.acid;
 
 import com.google.common.annotations.VisibleForTesting;
+import io.airlift.units.DataSize;
+import io.airlift.units.Duration;
 import io.prestosql.memory.context.AggregatedMemoryContext;
 import io.prestosql.orc.OrcDataSource;
 import io.prestosql.orc.OrcRecordReader;
+import io.prestosql.plugin.hive.DeleteDeltaLocations;
 import io.prestosql.plugin.hive.FileFormatDataSourceStats;
+import io.prestosql.plugin.hive.HdfsEnvironment;
 import io.prestosql.plugin.hive.HiveColumnHandle;
 import io.prestosql.plugin.hive.orc.OrcPageSource;
+import io.prestosql.plugin.hive.orc.OrcPageSourceFactory;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.block.Block;
-import io.prestosql.spi.block.BlockBuilder;
+import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.type.TypeManager;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.joda.time.DateTimeZone;
 
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.ExecutionException;
 
+import static io.prestosql.orc.AcidConstants.PRESTO_Acid_BUCKET_INDEX;
 import static io.prestosql.orc.AcidConstants.PRESTO_Acid_META_COLS_COUNT;
+import static io.prestosql.orc.AcidConstants.PRESTO_Acid_ORIGINAL_TRANSACTION_INDEX;
+import static io.prestosql.orc.AcidConstants.PRESTO_Acid_ROWID_INDEX;
+import static io.prestosql.plugin.hive.DeleteDeltaLocations.hasDeletedRows;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_BAD_DATA;
-import static io.prestosql.spi.type.BooleanType.BOOLEAN;
 
 public class AcidOrcPageSource
         extends OrcPageSource
 {
-    private Block isValidBlock;
+    private DeletedRowsRegistry deletedRowsRegistry;
+    private boolean deletedRowsPresent;
 
     public AcidOrcPageSource(
+            Path splitPath,
+            OrcPageSourceFactory pageSourceFactory,
+            ConnectorSession session,
+            Configuration configuration,
+            DateTimeZone hiveStorageTimeZone,
+            HdfsEnvironment hdfsEnvironment,
             OrcRecordReader recordReader,
             OrcDataSource orcDataSource,
             List<HiveColumnHandle> columns,
             TypeManager typeManager,
             AggregatedMemoryContext systemMemoryContext,
-            FileFormatDataSourceStats stats)
+            FileFormatDataSourceStats stats,
+            DataSize deletedRowsCacheSize,
+            Duration deletedRowsCacheTTL,
+            Optional<DeleteDeltaLocations> deleteDeltaLocations)
+            throws ExecutionException
     {
         super(recordReader, orcDataSource, columns, typeManager, systemMemoryContext, stats);
+        deletedRowsRegistry = new DeletedRowsRegistry(
+                splitPath,
+                pageSourceFactory,
+                session,
+                configuration,
+                hiveStorageTimeZone,
+                hdfsEnvironment,
+                deletedRowsCacheSize,
+                deletedRowsCacheTTL,
+                deleteDeltaLocations);
+        this.deletedRowsPresent = hasDeletedRows(deleteDeltaLocations);
     }
 
     @Override
@@ -56,8 +91,18 @@ public class AcidOrcPageSource
             return null;
         }
 
-        Block[] blocks = processAcidBlocks(dataPage);
-        return new Page(dataPage.getPositionCount(), blocks);
+        if (deletedRowsPresent) {
+            Block[] blocks = processAcidBlocks(dataPage);
+            return new Page(dataPage.getPositionCount(), blocks);
+        }
+        else {
+            Block[] blocks = new Block[dataPage.getChannelCount() + 1];
+            for (int i = 0; i < dataPage.getChannelCount(); i++) {
+                blocks[i] = dataPage.getBlock(i);
+            }
+            blocks[dataPage.getChannelCount()] = deletedRowsRegistry.createIsValidBlockForAllValid(dataPage.getPositionCount());
+            return new Page(dataPage.getPositionCount(), blocks);
+        }
     }
 
     private Block[] processAcidBlocks(Page page)
@@ -74,17 +119,10 @@ public class AcidOrcPageSource
             dataBlocks[colIdx++] = page.getBlock(i);
         }
 
-        int positions = page.getPositionCount();
-        if (isValidBlock == null || isValidBlock.getPositionCount() < positions) {
-            isValidBlock = BOOLEAN.createFixedSizeBlockBuilder(positions);
-            BlockBuilder builder = BOOLEAN.createFixedSizeBlockBuilder(positions);
-            for (int i = 0; i < positions; i++) {
-                BOOLEAN.writeBoolean(builder, true);
-            }
-            isValidBlock = builder.build();
-        }
-
-        dataBlocks[colIdx] = isValidBlock.getRegion(0, positions);
+        dataBlocks[colIdx] = deletedRowsRegistry.createIsValidBlock(
+                page.getBlock(PRESTO_Acid_ORIGINAL_TRANSACTION_INDEX),
+                page.getBlock(PRESTO_Acid_BUCKET_INDEX),
+                page.getBlock(PRESTO_Acid_ROWID_INDEX));
 
         return dataBlocks;
     }

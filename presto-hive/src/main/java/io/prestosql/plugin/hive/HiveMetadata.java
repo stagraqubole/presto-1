@@ -317,10 +317,6 @@ public class HiveMetadata
 
         verifyOnline(tableName, Optional.empty(), getProtectMode(table.get()), table.get().getParameters());
 
-        if (AcidUtils.isFullAcidTable(table.get().getParameters())) {
-            throw new PrestoException(NOT_SUPPORTED, "Reading from Full ACID table is not supported: " + tableName);
-        }
-
         return new HiveTableHandle(
                 tableName.getSchemaName(),
                 tableName.getTableName(),
