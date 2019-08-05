@@ -47,6 +47,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Maps.uniqueIndex;
+import static io.prestosql.plugin.hive.HiveColumnHandle.ColumnType.Acid_ROW_VALIDITY;
 import static io.prestosql.plugin.hive.HiveColumnHandle.ColumnType.PARTITION_KEY;
 import static io.prestosql.plugin.hive.HiveColumnHandle.ColumnType.REGULAR;
 import static io.prestosql.plugin.hive.HiveColumnHandle.ColumnType.SYNTHESIZED;
@@ -256,6 +257,12 @@ public class HivePageSourceProvider
             return new ColumnMapping(ColumnMappingKind.REGULAR, hiveColumnHandle, Optional.empty(), OptionalInt.of(index), coerceFrom);
         }
 
+        public static ColumnMapping generated(HiveColumnHandle hiveColumnHandle, int index, Optional<HiveType> coerceFrom)
+        {
+            checkArgument(hiveColumnHandle.getColumnType() == Acid_ROW_VALIDITY);
+            return new ColumnMapping(ColumnMappingKind.GENERATED, hiveColumnHandle, Optional.empty(), OptionalInt.of(index), coerceFrom);
+        }
+
         public static ColumnMapping prefilled(HiveColumnHandle hiveColumnHandle, String prefilledValue, Optional<HiveType> coerceFrom)
         {
             checkArgument(hiveColumnHandle.getColumnType() == PARTITION_KEY || hiveColumnHandle.getColumnType() == SYNTHESIZED);
@@ -295,7 +302,7 @@ public class HivePageSourceProvider
 
         public int getIndex()
         {
-            checkState(kind == ColumnMappingKind.REGULAR || kind == ColumnMappingKind.INTERIM);
+            checkState(kind == ColumnMappingKind.REGULAR || kind == ColumnMappingKind.INTERIM || kind == ColumnMappingKind.GENERATED);
             return index.getAsInt();
         }
 
@@ -327,6 +334,12 @@ public class HivePageSourceProvider
                 if (column.getColumnType() == REGULAR) {
                     checkArgument(regularColumnIndices.add(column.getHiveColumnIndex()), "duplicate hiveColumnIndex in columns list");
                     columnMappings.add(regular(column, regularIndex, coercionFrom));
+                    regularIndex++;
+                }
+                else if (column.getColumnType() == Acid_ROW_VALIDITY) {
+                    // isValid is a special column, it behaves like a REGULAR column as it is available for FilterOperator but it is generated rather than read from file
+                    checkArgument(regularColumnIndices.add(column.getHiveColumnIndex()), "duplicate hiveColumnIndex in columns list");
+                    columnMappings.add(generated(column, regularIndex, coercionFrom));
                     regularIndex++;
                 }
                 else {
@@ -382,6 +395,7 @@ public class HivePageSourceProvider
         REGULAR,
         PREFILLED,
         INTERIM,
+        GENERATED,
     }
 
     public static class BucketAdaptation
