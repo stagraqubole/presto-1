@@ -47,7 +47,7 @@ public class OrcPageSource
         implements ConnectorPageSource
 {
     private static final int NULL_ENTRY_SIZE = 0;
-    private final OrcRecordReader recordReader;
+    protected final OrcRecordReader recordReader;
     private final OrcDataSource orcDataSource;
 
     private final List<String> columnNames;
