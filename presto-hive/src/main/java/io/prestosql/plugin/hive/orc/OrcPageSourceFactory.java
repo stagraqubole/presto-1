@@ -24,6 +24,7 @@ import io.prestosql.orc.OrcReader;
 import io.prestosql.orc.OrcRecordReader;
 import io.prestosql.orc.TupleDomainOrcPredicate;
 import io.prestosql.orc.TupleDomainOrcPredicate.ColumnReference;
+import io.prestosql.plugin.hive.DeleteDeltaLocations;
 import io.prestosql.plugin.hive.FileFormatDataSourceStats;
 import io.prestosql.plugin.hive.HdfsEnvironment;
 import io.prestosql.plugin.hive.HiveColumnHandle;
@@ -56,6 +57,7 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.regex.Pattern;
 
+import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Strings.nullToEmpty;
 import static io.prestosql.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static io.prestosql.orc.OrcReader.INITIAL_BATCH_SIZE;
@@ -108,11 +110,14 @@ public class OrcPageSourceFactory
             Properties schema,
             List<HiveColumnHandle> columns,
             TupleDomain<HiveColumnHandle> effectivePredicate,
-            DateTimeZone hiveStorageTimeZone)
+            DateTimeZone hiveStorageTimeZone,
+            Optional<DeleteDeltaLocations> deleteDeltaLocations)
     {
         if (!isDeserializerClass(schema, OrcSerde.class)) {
             return Optional.empty();
         }
+
+        checkState(!deleteDeltaLocations.map(DeleteDeltaLocations::hadDeletedRows).orElse(false), "Delete Delta Locations should be empty");
 
         boolean isFullAcid = AcidUtils.isFullAcidTable(((Map<String, String>) (((Map) schema))));
         if (isFullAcid) {
