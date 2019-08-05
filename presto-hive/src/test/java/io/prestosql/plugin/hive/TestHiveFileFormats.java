@@ -577,7 +577,8 @@ public class TestHiveFileFormats
                 TYPE_MANAGER,
                 ImmutableMap.of(),
                 Optional.empty(),
-                false);
+                false,
+                Optional.empty());
 
         RecordCursor cursor = ((RecordPageSource) pageSource.get()).getCursor();
 
@@ -635,7 +636,8 @@ public class TestHiveFileFormats
                 TYPE_MANAGER,
                 ImmutableMap.of(),
                 Optional.empty(),
-                false);
+                false,
+                Optional.empty());
 
         assertTrue(pageSource.isPresent());
 
