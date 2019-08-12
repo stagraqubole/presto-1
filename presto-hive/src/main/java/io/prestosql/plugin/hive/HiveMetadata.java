@@ -151,7 +151,8 @@ import static io.prestosql.plugin.hive.HiveTableProperties.BUCKET_COUNT_PROPERTY
 import static io.prestosql.plugin.hive.HiveTableProperties.CSV_ESCAPE;
 import static io.prestosql.plugin.hive.HiveTableProperties.CSV_QUOTE;
 import static io.prestosql.plugin.hive.HiveTableProperties.CSV_SEPARATOR;
-import static io.prestosql.plugin.hive.HiveTableProperties.EXTERNAL_LOCATION_PROPERTY;
+import static io.prestosql.plugin.hive.HiveTableProperties.IS_EXTERNAL_TABLE;
+import static io.prestosql.plugin.hive.HiveTableProperties.LOCATION_PROPERTY;
 import static io.prestosql.plugin.hive.HiveTableProperties.ORC_BLOOM_FILTER_COLUMNS;
 import static io.prestosql.plugin.hive.HiveTableProperties.ORC_BLOOM_FILTER_FPP;
 import static io.prestosql.plugin.hive.HiveTableProperties.PARTITIONED_BY_PROPERTY;
@@ -164,6 +165,7 @@ import static io.prestosql.plugin.hive.HiveTableProperties.getBucketProperty;
 import static io.prestosql.plugin.hive.HiveTableProperties.getCsvProperty;
 import static io.prestosql.plugin.hive.HiveTableProperties.getExternalLocation;
 import static io.prestosql.plugin.hive.HiveTableProperties.getHiveStorageFormat;
+import static io.prestosql.plugin.hive.HiveTableProperties.getLocation;
 import static io.prestosql.plugin.hive.HiveTableProperties.getOrcBloomFilterColumns;
 import static io.prestosql.plugin.hive.HiveTableProperties.getOrcBloomFilterFpp;
 import static io.prestosql.plugin.hive.HiveTableProperties.getPartitionedBy;
@@ -468,9 +470,8 @@ public class HiveMetadata
 
         // External location property
         ImmutableMap.Builder<String, Object> properties = ImmutableMap.builder();
-        if (table.get().getTableType().equals(EXTERNAL_TABLE.name())) {
-            properties.put(EXTERNAL_LOCATION_PROPERTY, table.get().getStorage().getLocation());
-        }
+        properties.put(LOCATION_PROPERTY, table.get().getStorage().getLocation());
+        properties.put(IS_EXTERNAL_TABLE, table.get().getTableType().equals(EXTERNAL_TABLE.name()));
 
         // Storage format property
         try {
@@ -720,20 +721,30 @@ public class HiveMetadata
         checkPartitionTypesSupported(partitionColumns);
 
         Path targetPath;
-        boolean external;
-        String externalLocation = getExternalLocation(tableMetadata.getProperties());
-        if (externalLocation != null) {
-            if (!createsOfNonManagedTablesEnabled) {
-                throw new PrestoException(NOT_SUPPORTED, "Cannot create non-managed Hive table");
-            }
-
-            external = true;
-            targetPath = getExternalPath(new HdfsContext(session, schemaName, tableName), externalLocation);
+        boolean external = isExternalTable(tableMetadata.getProperties());
+        String location = getLocation(tableMetadata.getProperties());
+        if (location != null) {
+            targetPath = getPath(new HdfsContext(session, schemaName, tableName), location);
         }
         else {
-            external = false;
-            LocationHandle locationHandle = locationService.forNewTable(metastore, session, schemaName, tableName);
-            targetPath = locationService.getQueryWriteInfo(locationHandle).getTargetPath();
+            if (external) {
+                throw new PrestoException(NOT_SUPPORTED, format("Cannot create external Hive table without location. Set it through '%s' property", LOCATION_PROPERTY));
+            }
+
+            String externalLocation = getExternalLocation(tableMetadata.getProperties());
+            if (externalLocation != null) {
+                external = true;
+                targetPath = getPath(new HdfsContext(session, schemaName, tableName), externalLocation);
+            }
+            else {
+                external = false;
+                LocationHandle locationHandle = locationService.forNewTable(metastore, session, schemaName, tableName);
+                targetPath = locationService.getQueryWriteInfo(locationHandle).getTargetPath();
+            }
+        }
+
+        if (external && !createsOfNonManagedTablesEnabled) {
+            throw new PrestoException(NOT_SUPPORTED, "Cannot create non-managed Hive table");
         }
 
         Table table = buildTableObject(
@@ -859,12 +870,12 @@ public class HiveMetadata
         }
     }
 
-    private Path getExternalPath(HdfsContext context, String location)
+    private Path getPath(HdfsContext context, String location)
     {
         try {
             Path path = new Path(location);
             if (!isS3FileSystem(context, hdfsEnvironment, path)) {
-                if (!hdfsEnvironment.getFileSystem(context, path).isDirectory(path)) {
+                if (hdfsEnvironment.getFileSystem(context, path).isFile(path)) {
                     throw new PrestoException(INVALID_TABLE_PROPERTY, "External location must be a directory");
                 }
             }
