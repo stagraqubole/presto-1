@@ -172,6 +172,7 @@ import static io.prestosql.plugin.hive.HiveTableProperties.getOrcBloomFilterFpp;
 import static io.prestosql.plugin.hive.HiveTableProperties.getPartitionedBy;
 import static io.prestosql.plugin.hive.HiveTableProperties.getTextFooterSkipCount;
 import static io.prestosql.plugin.hive.HiveTableProperties.getTextHeaderSkipCount;
+import static io.prestosql.plugin.hive.HiveTableProperties.isExternalTable;
 import static io.prestosql.plugin.hive.HiveType.HIVE_STRING;
 import static io.prestosql.plugin.hive.HiveType.toHiveType;
 import static io.prestosql.plugin.hive.HiveUtil.PRESTO_VIEW_FLAG;
@@ -750,7 +751,7 @@ public class HiveMetadata
             }
             else {
                 external = false;
-                LocationHandle locationHandle = locationService.forNewTable(metastore, session, schemaName, tableName);
+                LocationHandle locationHandle = locationService.forNewTable(metastore, session, schemaName, tableName, Optional.empty());
                 targetPath = locationService.getQueryWriteInfo(locationHandle).getTargetPath();
             }
         }
@@ -1104,7 +1105,7 @@ public class HiveMetadata
     {
         verifyJvmTimeZone();
 
-        if (getExternalLocation(tableMetadata.getProperties()) != null) {
+        if (getExternalLocation(tableMetadata.getProperties()) != null || isExternalTable(tableMetadata.getProperties())) {
             throw new PrestoException(NOT_SUPPORTED, "External tables cannot be created using CREATE TABLE AS");
         }
 
@@ -1136,7 +1137,7 @@ public class HiveMetadata
                 .collect(toList());
         checkPartitionTypesSupported(partitionColumns);
 
-        LocationHandle locationHandle = locationService.forNewTable(metastore, session, schemaName, tableName);
+        LocationHandle locationHandle = locationService.forNewTable(metastore, session, schemaName, tableName, Optional.ofNullable(getLocation(tableMetadata.getProperties())));
         HiveOutputTableHandle result = new HiveOutputTableHandle(
                 schemaName,
                 tableName,
