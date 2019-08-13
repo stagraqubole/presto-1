@@ -160,6 +160,7 @@ import static io.prestosql.plugin.hive.HiveTableProperties.SORTED_BY_PROPERTY;
 import static io.prestosql.plugin.hive.HiveTableProperties.STORAGE_FORMAT_PROPERTY;
 import static io.prestosql.plugin.hive.HiveTableProperties.TEXTFILE_SKIP_FOOTER_LINE_COUNT;
 import static io.prestosql.plugin.hive.HiveTableProperties.TEXTFILE_SKIP_HEADER_LINE_COUNT;
+import static io.prestosql.plugin.hive.HiveTableProperties.filterInheritableProperties;
 import static io.prestosql.plugin.hive.HiveTableProperties.getAvroSchemaUrl;
 import static io.prestosql.plugin.hive.HiveTableProperties.getBucketProperty;
 import static io.prestosql.plugin.hive.HiveTableProperties.getCsvProperty;
@@ -331,7 +332,7 @@ public class HiveMetadata
             return null;
         }
         Optional<List<List<String>>> partitionValuesList = getPartitionList(analyzeProperties);
-        ConnectorTableMetadata tableMetadata = getTableMetadata(handle.getSchemaTableName());
+        ConnectorTableMetadata tableMetadata = getTableMetadata(handle.getSchemaTableName(), false);
         handle = handle.withAnalyzePartitionValues(partitionValuesList);
 
         List<String> partitionedBy = getPartitionedBy(tableMetadata.getProperties());
@@ -437,13 +438,19 @@ public class HiveMetadata
     @Override
     public ConnectorTableMetadata getTableMetadata(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
-        return getTableMetadata(((HiveTableHandle) tableHandle).getSchemaTableName());
+        return getTableMetadata(session, tableHandle, false);
     }
 
-    private ConnectorTableMetadata getTableMetadata(SchemaTableName tableName)
+    @Override
+    public ConnectorTableMetadata getTableMetadata(ConnectorSession session, ConnectorTableHandle tableHandle, boolean onlyInheritable)
+    {
+        return getTableMetadata(((HiveTableHandle) tableHandle).getSchemaTableName(), onlyInheritable);
+    }
+
+    private ConnectorTableMetadata getTableMetadata(SchemaTableName tableName, boolean onlyInheritable)
     {
         try {
-            return doGetTableMetadata(tableName);
+            return doGetTableMetadata(tableName, onlyInheritable);
         }
         catch (PrestoException e) {
             throw e;
@@ -455,7 +462,7 @@ public class HiveMetadata
         }
     }
 
-    private ConnectorTableMetadata doGetTableMetadata(SchemaTableName tableName)
+    private ConnectorTableMetadata doGetTableMetadata(SchemaTableName tableName, boolean onlyInheritable)
     {
         Optional<Table> table = metastore.getTable(tableName.getSchemaName(), tableName.getTableName());
         if (!table.isPresent() || table.get().getTableType().equals(TableType.VIRTUAL_VIEW.name())) {
@@ -533,7 +540,12 @@ public class HiveMetadata
 
         Optional<String> comment = Optional.ofNullable(table.get().getParameters().get(TABLE_COMMENT));
 
-        return new ConnectorTableMetadata(tableName, columns.build(), properties.build(), comment);
+        Map<String, Object> allProperties = properties.build();
+        if (onlyInheritable) {
+            allProperties = filterInheritableProperties(allProperties);
+        }
+
+        return new ConnectorTableMetadata(tableName, columns.build(), allProperties, comment);
     }
 
     private static Optional<String> getCsvSerdeProperty(Table table, String key)
@@ -608,7 +620,7 @@ public class HiveMetadata
         ImmutableMap.Builder<SchemaTableName, List<ColumnMetadata>> columns = ImmutableMap.builder();
         for (SchemaTableName tableName : listTables(session, prefix)) {
             try {
-                columns.put(tableName, getTableMetadata(tableName).getColumns());
+                columns.put(tableName, getTableMetadata(tableName, false).getColumns());
             }
             catch (HiveViewNotSupportedException e) {
                 // view is not supported

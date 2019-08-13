@@ -61,6 +61,8 @@ public class HiveTableProperties
     public static final String CSV_QUOTE = "csv_quote";
     public static final String CSV_ESCAPE = "csv_escape";
 
+    public static final List<String> NON_INHERITABLE_PROPERTIES = ImmutableList.of(EXTERNAL_LOCATION_PROPERTY, IS_EXTERNAL_TABLE, LOCATION_PROPERTY);
+
     private final List<PropertyMetadata<?>> tableProperties;
 
     @Inject
@@ -216,6 +218,15 @@ public class HiveTableProperties
             throw new PrestoException(INVALID_TABLE_PROPERTY, format("%s and %s must be specified together", BUCKETED_BY_PROPERTY, BUCKET_COUNT_PROPERTY));
         }
         return Optional.of(new HiveBucketProperty(bucketedBy, bucketCount, sortedBy));
+    }
+
+    public static Map<String, Object> filterInheritableProperties(Map<String, Object> properties)
+    {
+        return properties
+                .entrySet()
+                .stream()
+                .filter(entry -> !NON_INHERITABLE_PROPERTIES.contains(entry.getKey()))
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
     @SuppressWarnings("unchecked")
