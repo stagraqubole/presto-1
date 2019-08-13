@@ -135,10 +135,10 @@ public class PhoenixMetadata
     @Override
     public ConnectorTableMetadata getTableMetadata(ConnectorSession session, ConnectorTableHandle table)
     {
-        return getTableMetadata(session, table, false);
+        return getRequiredTableMetadata(session, table, false);
     }
 
-    public ConnectorTableMetadata getTableMetadata(ConnectorSession session, ConnectorTableHandle table, boolean rowkeyRequired)
+    public ConnectorTableMetadata getRequiredTableMetadata(ConnectorSession session, ConnectorTableHandle table, boolean rowkeyRequired)
     {
         JdbcTableHandle handle = (JdbcTableHandle) table;
         List<ColumnMetadata> columnMetadata = phoenixClient.getColumns(session, handle).stream()
@@ -272,7 +272,7 @@ public class PhoenixMetadata
     public ConnectorInsertTableHandle beginInsert(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         JdbcTableHandle handle = (JdbcTableHandle) tableHandle;
-        ConnectorTableMetadata tableMetadata = getTableMetadata(session, tableHandle, true);
+        ConnectorTableMetadata tableMetadata = getRequiredTableMetadata(session, tableHandle, true);
         List<ColumnMetadata> nonRowkeyCols = tableMetadata.getColumns().stream()
                 .filter(column -> !ROWKEY.equalsIgnoreCase(column.getName()))
                 .collect(toImmutableList());
