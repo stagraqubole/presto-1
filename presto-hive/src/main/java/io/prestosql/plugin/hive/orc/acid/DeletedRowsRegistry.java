@@ -31,7 +31,6 @@ import io.prestosql.plugin.hive.orc.OrcPageSourceFactory;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.block.Block;
-import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.connector.ConnectorPageSource;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.predicate.TupleDomain;
@@ -66,7 +65,6 @@ import static io.prestosql.plugin.hive.DeleteDeltaLocations.hasDeletedRows;
 import static io.prestosql.plugin.hive.HiveColumnHandle.ColumnType.REGULAR;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_BAD_DATA;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_UNKNOWN_ERROR;
-import static io.prestosql.spi.type.BooleanType.BOOLEAN;
 import static org.apache.hadoop.hive.serde.serdeConstants.SERIALIZATION_LIB;
 
 public class DeletedRowsRegistry
@@ -75,7 +73,7 @@ public class DeletedRowsRegistry
     private final String queryId;
     private final boolean deltedRowsPresent;
 
-    private Block isValidBlock;
+    private int[] validPositions;
 
     // variables to track cache hit rate, Guava Cache.stats() is not useful because multiple threads loading same
     // value get synchronised and only one of them load value but all of them update cache-miss count.
@@ -198,30 +196,22 @@ public class DeletedRowsRegistry
                         deleteDeltaInfo.getStatementId()));
     }
 
-    public Block createIsValidBlock(Block orignalTransaction, Block bucket, Block rowId)
+    public ValidPositions getValidPositions(int positions, Block orignalTransaction, Block bucket, Block rowId)
     {
-        checkState(deltedRowsPresent, "Cannot create isValid block from meta columns if deleted rows are not present");
+        checkState(deltedRowsPresent, "Cannot create valid positions if deleted rows are not present");
         Page input = new Page(orignalTransaction, bucket, rowId);
-        BlockBuilder isValidBlock = BOOLEAN.createFixedSizeBlockBuilder(input.getPositionCount());
-        Set<RowId> deletedRows = loadDeletedRows();
-        for (int pos = 0; pos < rowId.getPositionCount(); pos++) {
-            BOOLEAN.writeBoolean(isValidBlock, !deletedRows.contains(createRowId(input, pos)));
+        if (validPositions == null || validPositions.length < positions) {
+            validPositions = new int[positions];
         }
-        return isValidBlock.build();
-    }
 
-    public Block createIsValidBlockForAllValid(int positions)
-    {
-        checkState(!deltedRowsPresent, "deleted rows present, isValid block should be created using metacolumns");
-        if (isValidBlock == null || isValidBlock.getPositionCount() < positions) {
-            isValidBlock = BOOLEAN.createFixedSizeBlockBuilder(positions);
-            BlockBuilder builder = BOOLEAN.createFixedSizeBlockBuilder(positions);
-            for (int i = 0; i < positions; i++) {
-                BOOLEAN.writeBoolean(builder, true);
+        Set<RowId> deletedRows = loadDeletedRows();
+        int index = 0;
+        for (int position = 0; position < positions; position++) {
+            if (!deletedRows.contains(createRowId(input, position))) {
+                validPositions[index++] = position;
             }
-            isValidBlock = builder.build();
         }
-        return isValidBlock.getRegion(0, positions);
+        return new ValidPositions(validPositions, index);
     }
 
     private String getCacheKey(String queryId, String partitionLocation, String splitFilename)

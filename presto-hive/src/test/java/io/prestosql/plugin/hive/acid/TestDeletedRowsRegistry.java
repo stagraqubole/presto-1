@@ -17,6 +17,7 @@ import io.prestosql.plugin.hive.DeleteDeltaLocations;
 import io.prestosql.plugin.hive.FileFormatDataSourceStats;
 import io.prestosql.plugin.hive.orc.OrcPageSourceFactory;
 import io.prestosql.plugin.hive.orc.acid.DeletedRowsRegistry;
+import io.prestosql.plugin.hive.orc.acid.ValidPositions;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
 import org.apache.hadoop.conf.Configuration;
@@ -36,9 +37,7 @@ import static io.prestosql.plugin.hive.HiveTestUtils.SESSION;
 import static io.prestosql.plugin.hive.HiveTestUtils.TYPE_MANAGER;
 import static io.prestosql.plugin.hive.acid.AcidPageProcessorProvider.CONFIG;
 import static io.prestosql.spi.type.BigintType.BIGINT;
-import static io.prestosql.spi.type.BooleanType.BOOLEAN;
 import static io.prestosql.spi.type.IntegerType.INTEGER;
-import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
 
 public class TestDeletedRowsRegistry
@@ -87,29 +86,10 @@ public class TestDeletedRowsRegistry
         }
 
         // 2 rows should be deleted RowId{2, 536870912, 0} and RowId{6, 536870912, 0}
-        Block isValid = registry.createIsValidBlock(originalTransaction.build(), bucket.build(), rowId.build());
-        for (int i = 0; i < size; i++) {
-            if (i == 2 || i == 6) {
-                assertFalse(BOOLEAN.getBoolean(isValid, i), "Row number " + i + " should not be marked valid");
-            }
-            else {
-                assertTrue(BOOLEAN.getBoolean(isValid, i), "Row number " + i + " should have been marked valid");
-            }
-        }
-    }
-
-    @Test
-    public void testIsValidBlockWithNoDeletedRows()
-            throws ExecutionException
-    {
-        Path inputSplitPath = new Path("file:///tmp/bucket_00000");
-        DeletedRowsRegistry registry = createDeletedRowsRegistry(inputSplitPath, Optional.empty());
-        int size = 100;
-        Block isValid = registry.createIsValidBlockForAllValid(size);
-        assertTrue(isValid.getPositionCount() == size, "Created isValid block of unexpected size " + isValid.getPositionCount());
-        for (int i = 0; i < size; i++) {
-            assertTrue(BOOLEAN.getBoolean(isValid, i), "Read 'False' at position " + i);
-        }
+        ValidPositions validPositions = registry.getValidPositions(size, originalTransaction.build(), bucket.build(), rowId.build());
+        assertTrue(validPositions.getPositionCount() == 2, "Unexpected number of valid positions found: " + validPositions.getPositionCount());
+        assertTrue(validPositions.getPosition(0) == 2, "Unexpected valid positions at index 0, expected 2 but found: " + validPositions.getPosition(0));
+        assertTrue(validPositions.getPosition(1) == 6, "Unexpected valid positions at index 1, expected 6 but found: " + validPositions.getPosition(1));
     }
 
     @Test
@@ -123,7 +103,7 @@ public class TestDeletedRowsRegistry
         Block bucket = fillDummyValues(INTEGER.createFixedSizeBlockBuilder(size), size);
         Block rowID = fillDummyValues(BIGINT.createFixedSizeBlockBuilder(size), size);
         try {
-            Block isValid = registry.createIsValidBlock(originalTransaction, bucket, rowID);
+            ValidPositions validPositions = registry.getValidPositions(size, originalTransaction, bucket, rowID);
         }
         catch (IllegalStateException e) {
             // Valid case

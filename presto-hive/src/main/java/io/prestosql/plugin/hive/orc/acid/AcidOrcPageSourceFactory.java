@@ -33,7 +33,6 @@ import io.prestosql.plugin.hive.HiveConfig;
 import io.prestosql.plugin.hive.HivePageSourceFactory;
 import io.prestosql.plugin.hive.HiveType;
 import io.prestosql.plugin.hive.orc.HdfsOrcDataSource;
-import io.prestosql.plugin.hive.orc.OrcPageSource;
 import io.prestosql.plugin.hive.orc.OrcPageSourceFactory;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.connector.ConnectorPageSource;
@@ -159,7 +158,7 @@ public class AcidOrcPageSourceFactory
                 deleteDeltaLocations));
     }
 
-    public static OrcPageSource createOrcPageSource(
+    public static AcidOrcPageSource createOrcPageSource(
             OrcPageSourceFactory pageSourceFactory,
             HdfsEnvironment hdfsEnvironment,
             String sessionUser,
@@ -211,10 +210,7 @@ public class AcidOrcPageSourceFactory
         try {
             OrcReader reader = new OrcReader(orcDataSource, maxMergeDistance, tinyStripeThreshold, maxReadBlockSize);
 
-            // We need meta columns to created rowIds if there are delete deltas present
-            boolean metaColumnsNeeded = hasDeletedRows(deleteDeltaLocations);
-
-            List<HiveColumnHandle> physicalColumns = getPhysicalHiveColumnHandlesAcid(columns, reader, path, metaColumnsNeeded);
+            List<HiveColumnHandle> physicalColumns = getPhysicalHiveColumnHandlesAcid(columns, reader, path, hasDeletedRows(deleteDeltaLocations));
             ImmutableMap.Builder<Integer, Type> includedColumns = ImmutableMap.builder();
             ImmutableList.Builder<ColumnReference<HiveColumnHandle>> columnReferences = ImmutableList.builder();
             for (HiveColumnHandle column : physicalColumns) {
