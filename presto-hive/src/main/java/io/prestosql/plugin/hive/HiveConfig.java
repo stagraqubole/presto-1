@@ -661,6 +661,7 @@ public class HiveConfig
         return this;
     }
 
+    @Deprecated
     public boolean getCreatesOfNonManagedTablesEnabled()
     {
         return createsOfNonManagedTablesEnabled;
