@@ -171,9 +171,9 @@ public class HiveTableProperties
         return (String) tableProperties.get(EXTERNAL_LOCATION_PROPERTY);
     }
 
-    public static String getLocation(Map<String, Object> tableProperties)
+    public static Optional<String> getLocation(Map<String, Object> tableProperties)
     {
-        return (String) tableProperties.get(LOCATION_PROPERTY);
+        return Optional.ofNullable((String) tableProperties.get(LOCATION_PROPERTY));
     }
 
     public static boolean isExternalTable(Map<String, Object> tableProperties)

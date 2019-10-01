@@ -764,9 +764,9 @@ public class HiveMetadata
 
         Path targetPath;
         boolean external = isExternalTable(tableMetadata.getProperties());
-        String location = getLocation(tableMetadata.getProperties());
-        if (location != null) {
-            targetPath = getPath(new HdfsContext(session, schemaName, tableName), location);
+        Optional<String> location = getLocation(tableMetadata.getProperties());
+        if (location.isPresent()) {
+            targetPath = getPath(new HdfsContext(session, schemaName, tableName), location.get());
         }
         else {
             if (external) {
@@ -1179,7 +1179,7 @@ public class HiveMetadata
                 .collect(toList());
         checkPartitionTypesSupported(partitionColumns);
 
-        LocationHandle locationHandle = locationService.forNewTable(metastore, session, schemaName, tableName, Optional.ofNullable(getLocation(tableMetadata.getProperties())));
+        LocationHandle locationHandle = locationService.forNewTable(metastore, session, schemaName, tableName, getLocation(tableMetadata.getProperties()));
         HiveOutputTableHandle result = new HiveOutputTableHandle(
                 schemaName,
                 tableName,
