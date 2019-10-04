@@ -410,7 +410,7 @@ public class BackgroundHiveSplitLoader
                     false,
                     true);
 
-            if (AcidUtils.isFullAcidTable(table.getParameters()) && !directory.getOriginalFiles().isEmpty()) {
+            if (AcidUtils.isFullAcidTable(table.getParameters()) && (!directory.getOriginalFiles().isEmpty() || directory.isBaseInRawFormat())) {
                 throw new PrestoException(
                         NOT_SUPPORTED,
                         format("%s.%s table has files in non-acid form which is not yet supported with full ACID tables", table.getSchemaTableName().getSchemaName(), table.getTableName()));
