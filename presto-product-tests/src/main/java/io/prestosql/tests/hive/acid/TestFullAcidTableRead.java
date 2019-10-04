@@ -13,36 +13,127 @@
  */
 package io.prestosql.tests.hive.acid;
 
+import io.prestosql.tempto.query.QueryResult;
 import io.prestosql.tests.hive.HiveProductTest;
 import org.testng.SkipException;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
+import static io.prestosql.tempto.assertions.QueryAssert.Row.row;
 import static io.prestosql.tempto.assertions.QueryAssert.assertThat;
 import static io.prestosql.tempto.query.QueryExecutor.query;
 import static io.prestosql.tests.TestGroups.HIVE_TRANSACTIONAL;
 import static io.prestosql.tests.TestGroups.STORAGE_FORMATS;
 import static io.prestosql.tests.utils.QueryExecutors.onHive;
+import static java.util.Locale.ENGLISH;
 
 public class TestFullAcidTableRead
         extends HiveProductTest
 {
-    @Test(groups = {STORAGE_FORMATS, HIVE_TRANSACTIONAL})
-    public void testRead()
+    @Test(groups = {STORAGE_FORMATS, HIVE_TRANSACTIONAL}, dataProvider = "fullAcidTableTypes")
+    public void testSelectFromFullAcidTable(FullAcidTableType type)
     {
         if (getHiveVersionMajor() < 3) {
             throw new SkipException("Presto Hive transactional tables are supported with Hive version 3 or above");
         }
 
-        String tableName = "full_acid_read";
-        onHive().executeQuery("" +
-                "CREATE TABLE " + tableName + "(a bigint)" +
-                "STORED AS ORC TBLPROPERTIES ('transactional'='true')");
+        String tableName = "full_acid_table" + type.name().toLowerCase(ENGLISH);
+        createTable(tableName, type.isPartitioned());
+
         try {
-            assertThat(() -> query("SELECT * FROM " + tableName))
-                    .failsWithMessage("Full ACID tables are not supported: default." + tableName);
+            onHive().executeQuery("INSERT OVERWRITE TABLE " + tableName + getHivePartitionString(type.isPartitioned()) + " VALUES (21, 1)");
+
+            String selectFromOnePartitionsSql = "SELECT col, fcol FROM " + tableName + " ORDER BY col";
+            QueryResult onePartitionQueryResult = query(selectFromOnePartitionsSql);
+            assertThat(onePartitionQueryResult).containsOnly(row(21, 1));
+
+            onHive().executeQuery("INSERT INTO TABLE " + tableName + getHivePartitionString(type.isPartitioned()) + " VALUES (22, 2)");
+            onePartitionQueryResult = query(selectFromOnePartitionsSql);
+            assertThat(onePartitionQueryResult).containsExactly(row(21, 1), row(22, 2));
+
+            // test filtering
+            onePartitionQueryResult = query("SELECT col, fcol FROM " + tableName + " WHERE fcol = 1 ORDER BY col");
+            assertThat(onePartitionQueryResult).containsOnly(row(21, 1));
+
+            // delete a row
+            onHive().executeQuery(
+                    "DELETE FROM " + tableName + " where fcol=2");
+            onePartitionQueryResult = query(selectFromOnePartitionsSql);
+            assertThat(onePartitionQueryResult).containsOnly(row(21, 1));
+
+            // update the existing row
+            onHive().executeQuery(
+                    "UPDATE " + tableName + " set col = 23 " + getPrestoPartitionPredicate(type.isPartitioned(), "fcol = 1"));
+            onePartitionQueryResult = query(selectFromOnePartitionsSql);
+            assertThat(onePartitionQueryResult).containsOnly(row(23, 1));
         }
         finally {
             onHive().executeQuery("DROP TABLE " + tableName);
         }
+    }
+
+    private static String getHivePartitionString(boolean isPartitioned)
+    {
+        if (!isPartitioned) {
+            return "";
+        }
+
+        return " PARTITION (part_col=2) ";
+    }
+
+    private static String getPrestoPartitionPredicate(boolean isPartitioned, String columnPredicate)
+    {
+        String predicate = " WHERE " + columnPredicate;
+        if (isPartitioned) {
+            predicate += " AND part_col = 2 ";
+        }
+        return predicate;
+    }
+
+    private static void createTable(String tableName, boolean isPartitioned)
+    {
+        StringBuilder builder = new StringBuilder()
+                .append("CREATE TABLE IF NOT EXISTS ")
+                .append(tableName)
+                .append(" (col INT,")
+                .append("fcol INT) ");
+        if (isPartitioned) {
+            builder.append("PARTITIONED BY (part_col INT) ");
+        }
+
+        builder.append("STORED AS ORC ")
+                .append("TBLPROPERTIES ('transactional'='true') ");
+
+        onHive().executeQuery(builder.toString());
+    }
+
+    @DataProvider
+    public Object[][] fullAcidTableTypes()
+    {
+        return new Object[][] {
+                {FullAcidTableType.UNPARTITIONED},
+                {FullAcidTableType.PARTITIONED}
+        };
+    }
+
+    private enum FullAcidTableType
+    {
+        UNPARTITIONED {
+            @Override
+            boolean isPartitioned()
+            {
+                return false;
+            }
+        },
+        PARTITIONED {
+            @Override
+            boolean isPartitioned()
+            {
+                return true;
+            }
+        },
+        /**/;
+
+        abstract boolean isPartitioned();
     }
 }
