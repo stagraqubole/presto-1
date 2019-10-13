@@ -81,7 +81,12 @@ public class AcidNationRow
 
     public static List<AcidNationRow> readFileCols(ConnectorPageSource pageSource, List<String> columnNames, List<Type> columnTypes, boolean resultsNeeded)
     {
-        List<AcidNationRow> rows = new ArrayList(resultsNeeded ? 25000 : 0);
+        return readFileCols(pageSource, columnNames, columnTypes, resultsNeeded, 25000);
+    }
+
+    public static List<AcidNationRow> readFileCols(ConnectorPageSource pageSource, List<String> columnNames, List<Type> columnTypes, boolean resultsNeeded, int numberOfRows)
+    {
+        List<AcidNationRow> rows = new ArrayList(resultsNeeded ? numberOfRows : 0);
 
         while (!pageSource.isFinished()) {
             Page page = pageSource.getNextPage();
@@ -113,6 +118,13 @@ public class AcidNationRow
     public static List<AcidNationRow> getExpectedResult(Optional<Integer> onlyForRowId, Optional<Integer> onlyForColumnId, Optional<List<Integer>> invalidRows)
             throws IOException
     {
+        return getExpectedResult(onlyForRowId, onlyForColumnId, invalidRows, 1000);
+    }
+
+    public static List<AcidNationRow> getExpectedResult(Optional<Integer> onlyForRowId, Optional<Integer> onlyForColumnId,
+                                                        Optional<List<Integer>> invalidRows, int replicationFactor)
+            throws IOException
+    {
         String nationFilePath = Thread.currentThread().getContextClassLoader().getResource("nation.tbl").getPath();
         final ImmutableList.Builder<AcidNationRow> result = ImmutableList.builder();
         long rowId = 0;
@@ -128,7 +140,7 @@ public class AcidNationRow
                 if (invalidRows.isPresent() && invalidRows.get().contains(lineNum)) {
                     continue;
                 }
-                rowId += replicateIntoResult(line, result, rowId, onlyForColumnId);
+                rowId += replicateIntoResult(line, result, rowId, onlyForColumnId, replicationFactor);
             }
         }
         finally {
@@ -137,9 +149,9 @@ public class AcidNationRow
         return result.build();
     }
 
-    public static long replicateIntoResult(String line, ImmutableList.Builder<AcidNationRow> resultBuilder, long startRowId, Optional<Integer> onlyForColumnId)
+    public static long replicateIntoResult(String line, ImmutableList.Builder<AcidNationRow> resultBuilder, long startRowId,
+                                           Optional<Integer> onlyForColumnId, long replicationFactor)
     {
-        long replicationFactor = 1000; // same way the nationFile25kRowsSortedOnNationKey.orc is created
         for (int i = 0; i < replicationFactor; i++) {
             String[] cols = line.split("\\|");
             resultBuilder.add(new AcidNationRow(

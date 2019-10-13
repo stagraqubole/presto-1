@@ -24,7 +24,7 @@ import io.prestosql.parquet.RichColumnDescriptor;
 import io.prestosql.parquet.predicate.Predicate;
 import io.prestosql.parquet.reader.MetadataReader;
 import io.prestosql.parquet.reader.ParquetReader;
-import io.prestosql.plugin.hive.DeleteDeltaLocations;
+import io.prestosql.plugin.hive.AcidInfo;
 import io.prestosql.plugin.hive.FileFormatDataSourceStats;
 import io.prestosql.plugin.hive.HdfsEnvironment;
 import io.prestosql.plugin.hive.HiveColumnHandle;
@@ -114,13 +114,13 @@ public class ParquetPageSourceFactory
             List<HiveColumnHandle> columns,
             TupleDomain<HiveColumnHandle> effectivePredicate,
             DateTimeZone hiveStorageTimeZone,
-            Optional<DeleteDeltaLocations> deleteDeltaLocations)
+            Optional<AcidInfo> acidInfo)
     {
         if (!PARQUET_SERDE_CLASS_NAMES.contains(getDeserializerClassName(schema))) {
             return Optional.empty();
         }
 
-        checkState(!deleteDeltaLocations.map(DeleteDeltaLocations::hadDeletedRows).orElse(false), "Delete Delta Locations should be empty");
+        checkState(!acidInfo.isPresent(), "Acid Info should be empty");
 
         return Optional.of(createParquetPageSource(
                 hdfsEnvironment,

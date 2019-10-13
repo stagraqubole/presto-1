@@ -16,7 +16,7 @@ package io.prestosql.plugin.hive.acid;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import io.prestosql.plugin.hive.DeleteDeltaLocations;
+import io.prestosql.plugin.hive.AcidInfo;
 import io.prestosql.plugin.hive.FileFormatDataSourceStats;
 import io.prestosql.plugin.hive.HiveColumnHandle;
 import io.prestosql.plugin.hive.HivePageSourceProvider;
@@ -91,7 +91,8 @@ public class TestHivePageSourceProvider
         AcidOrcPageSourceFactory acidOrcPageSourceFactory = new AcidOrcPageSourceFactory(TYPE_MANAGER, CONFIG, HDFS_ENVIRONMENT, new FileFormatDataSourceStats(), orcPageSourceFactory);
         HivePageSourceProvider pageSourceProvider = new HivePageSourceProvider(CONFIG, HDFS_ENVIRONMENT, ImmutableSet.of(), ImmutableSet.of(acidOrcPageSourceFactory), TYPE_MANAGER);
 
-        HiveSplit split = createHiveSplit(Optional.of(AcidNationRow.getDeletaDeltaLocations()));
+        Path path = new Path(Thread.currentThread().getContextClassLoader().getResource("nation.tbl").getPath());
+        HiveSplit split = createHiveSplit(Optional.of(new AcidInfo.Builder(path).deleteDeltaLocations(Optional.of(AcidNationRow.getDeletaDeltaLocations())).bucketId(Optional.of(0L)).build()));
         HiveTableHandle table = new HiveTableHandle("test", "test", ImmutableMap.of(), ImmutableList.of(), Optional.empty());
         ConnectorPageSource pageSource = pageSourceProvider.createPageSource(new HiveTransactionHandle(), SESSION, split, table, getColumnHandles());
         List<AcidNationRow> rows = readFileCols(pageSource, columnNames, columnTypes, true);
@@ -117,7 +118,7 @@ public class TestHivePageSourceProvider
         return builder.build();
     }
 
-    private HiveSplit createHiveSplit(Optional<DeleteDeltaLocations> deleteDeltaLocations)
+    private HiveSplit createHiveSplit(Optional<AcidInfo> acidInfo)
             throws IOException
     {
         Configuration config = new JobConf(new Configuration(false));
@@ -140,7 +141,7 @@ public class TestHivePageSourceProvider
                 ImmutableMap.of(),
                 Optional.empty(),
                 false,
-                deleteDeltaLocations);
+                acidInfo);
     }
 
     private Properties createSchema()

@@ -114,7 +114,7 @@ public class HivePageSourceProvider
                 hiveSplit.getColumnCoercions(),
                 hiveSplit.getBucketConversion(),
                 hiveSplit.isS3SelectPushdownEnabled(),
-                hiveSplit.getDeleteDetlaLocations());
+                hiveSplit.getAcidInfo());
         if (pageSource.isPresent()) {
             return pageSource.get();
         }
@@ -140,7 +140,7 @@ public class HivePageSourceProvider
             Map<Integer, HiveType> columnCoercions,
             Optional<BucketConversion> bucketConversion,
             boolean s3SelectPushdownEnabled,
-            Optional<DeleteDeltaLocations> deleteDeltaLocations)
+            Optional<AcidInfo> acidInfo)
     {
         List<ColumnMapping> columnMappings = ColumnMapping.buildColumnMappings(
                 partitionKeys,
@@ -174,7 +174,7 @@ public class HivePageSourceProvider
                     toColumnHandles(regularAndInterimColumnMappings, true),
                     effectivePredicate,
                     hiveStorageTimeZone,
-                    deleteDeltaLocations);
+                    acidInfo);
             if (pageSource.isPresent()) {
                 return Optional.of(
                         new HivePageSource(

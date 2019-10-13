@@ -37,5 +37,5 @@ public interface HivePageSourceFactory
             List<HiveColumnHandle> columns,
             TupleDomain<HiveColumnHandle> effectivePredicate,
             DateTimeZone hiveStorageTimeZone,
-            Optional<DeleteDeltaLocations> deleteDeltaLocations);
+            Optional<AcidInfo> acidInfo);
 }

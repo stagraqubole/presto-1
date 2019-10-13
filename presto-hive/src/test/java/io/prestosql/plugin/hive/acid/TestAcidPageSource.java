@@ -15,9 +15,12 @@ package io.prestosql.plugin.hive.acid;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import io.prestosql.plugin.hive.AcidInfo;
+import io.prestosql.plugin.hive.DeleteDeltaLocations;
 import io.prestosql.plugin.hive.HiveColumnHandle;
 import io.prestosql.plugin.hive.HiveType;
 import io.prestosql.plugin.hive.HiveTypeTranslator;
+import io.prestosql.plugin.hive.OriginalFileLocations;
 import io.prestosql.plugin.hive.orc.OrcPageSource;
 import io.prestosql.spi.connector.ConnectorPageSource;
 import io.prestosql.spi.predicate.Domain;
@@ -26,6 +29,7 @@ import io.prestosql.spi.predicate.ValueSet;
 import io.prestosql.spi.type.IntegerType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.VarcharType;
+import org.apache.hadoop.fs.Path;
 import org.testng.annotations.Test;
 
 import java.io.IOException;
@@ -36,6 +40,7 @@ import java.util.Optional;
 import static io.prestosql.plugin.hive.HiveColumnHandle.ColumnType.REGULAR;
 import static io.prestosql.plugin.hive.acid.AcidNationRow.getExpectedResult;
 import static io.prestosql.plugin.hive.acid.AcidNationRow.readFileCols;
+import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
 
@@ -64,7 +69,7 @@ public class TestAcidPageSource
     public void testFullFileRead()
             throws IOException
     {
-        ConnectorPageSource pageSource = AcidPageProcessorProvider.getAcidPageSource(filename, columnNames, columnTypes);
+        ConnectorPageSource pageSource = AcidPageProcessorProvider.getAcidPageSource(filename, columnNames, columnTypes, Optional.empty());
         List<AcidNationRow> rows = readFullFile(pageSource, true);
 
         List<AcidNationRow> expected = getExpectedResult(Optional.empty(), Optional.empty(), Optional.empty());
@@ -76,7 +81,7 @@ public class TestAcidPageSource
             throws IOException
     {
         int colToRead = 2;
-        ConnectorPageSource pageSource = AcidPageProcessorProvider.getAcidPageSource(filename, ImmutableList.of(columnNames.get(colToRead)), ImmutableList.of(columnTypes.get(colToRead)));
+        ConnectorPageSource pageSource = AcidPageProcessorProvider.getAcidPageSource(filename, ImmutableList.of(columnNames.get(colToRead)), ImmutableList.of(columnTypes.get(colToRead)), Optional.empty());
         List<AcidNationRow> rows = readFileCols(pageSource, ImmutableList.of(columnNames.get(colToRead)), ImmutableList.of(columnTypes.get(colToRead)), true);
 
         List<AcidNationRow> expected = getExpectedResult(Optional.empty(), Optional.of(colToRead), Optional.empty());
@@ -100,7 +105,8 @@ public class TestAcidPageSource
         TupleDomain<HiveColumnHandle> tupleDomain = TupleDomain.withColumnDomains(
                 ImmutableMap.of(nationKeyColumnHandle, nonExistingDomain));
 
-        ConnectorPageSource pageSource = AcidPageProcessorProvider.getAcidPageSource(filename, columnNames, columnTypes, tupleDomain);
+        ConnectorPageSource pageSource = AcidPageProcessorProvider.getAcidPageSource(filename, columnNames, columnTypes,
+                tupleDomain, Optional.empty());
         List<AcidNationRow> rows = readFullFile(pageSource, true);
 
         assertTrue(rows.size() == 0);
@@ -125,7 +131,8 @@ public class TestAcidPageSource
         TupleDomain<HiveColumnHandle> tupleDomain = TupleDomain.withColumnDomains(
                 ImmutableMap.of(nationKeyColumnHandle, nonExistingDomain));
 
-        ConnectorPageSource pageSource = AcidPageProcessorProvider.getAcidPageSource(filename, columnNames, columnTypes, tupleDomain);
+        ConnectorPageSource pageSource = AcidPageProcessorProvider.getAcidPageSource(filename, columnNames, columnTypes,
+                tupleDomain, Optional.empty());
         List<AcidNationRow> rows = readFullFile(pageSource, true);
 
         List<AcidNationRow> expected = getExpectedResult(Optional.of(0), Optional.empty(), Optional.empty());
@@ -134,6 +141,40 @@ public class TestAcidPageSource
         assertTrue(((OrcPageSource) pageSource).getRecordReader().stripesRead() == 1);  // 1 out of 5 stripes should be read
         assertTrue(((OrcPageSource) pageSource).getRecordReader().getRowGroupsRead() == 1); // 1 out of 25 rowgroups should be read
         assertTrue(Objects.equals(expected, rows));
+    }
+
+    @Test
+    public void testFullFileReadOriginalFilesTable()
+            throws IOException
+    {
+        /**
+         * Table 'fullacidNationTableWithOriginalFiles' has original files and delete delta file which correspond to a deleted row with
+         * nation name = "UNITED STATES"
+         * The test insures we are reading all the rows except the deleted row (i.e. row with nation name = "UNITED STATES").
+         */
+        String tableName = "fullacidNationTableWithOriginalFiles";
+        String tablePath = Thread.currentThread().getContextClassLoader().getResource(tableName).getPath();
+        DeleteDeltaLocations.Builder deleteDeltaLocationsBuilder = new DeleteDeltaLocations.Builder(new Path(tablePath));
+        deleteDeltaLocationsBuilder.addDeleteDelta(new Path(tablePath + "/delete_delta_10000001_10000001_0000"), 10000001, 10000001, 0);
+
+        OriginalFileLocations.Builder originalFileLocationsBuilder = new OriginalFileLocations.Builder(new Path(tablePath));
+        originalFileLocationsBuilder.addOriginalFileInfo(tablePath + "/000000_0", 1780);
+
+        AcidInfo acidInfo = new AcidInfo(Optional.of(deleteDeltaLocationsBuilder.build()),
+                Optional.of(originalFileLocationsBuilder.build()), Optional.of(0L));
+        ConnectorPageSource pageSource = AcidPageProcessorProvider.getAcidPageSource(tableName + "/000000_0", columnNames, columnTypes, Optional.of(acidInfo));
+        List<AcidNationRow> rows = readFileCols(pageSource, columnNames, columnTypes, true, 24);
+
+        List<AcidNationRow> completeTableRows = getExpectedResult(Optional.empty(), Optional.empty(), Optional.empty(), 1);
+
+        String deletedRowNameColumn = "UNITED STATES";
+        int deletedRowKey = 24;
+        assertTrue(completeTableRows.stream().anyMatch(acidNationRow -> acidNationRow.name.equals(deletedRowNameColumn) && acidNationRow.nationkey == deletedRowKey),
+                "Complete table rows should have the deleted row");
+        assertFalse(rows.stream().anyMatch(acidNationRow -> acidNationRow.name.equals(deletedRowNameColumn) && acidNationRow.nationkey == deletedRowKey),
+                "Deleted row shouldn't be present in the result");
+        assertEquals(completeTableRows.subList(0, completeTableRows.size() - 1), rows, "One row is deleted so total number of rows should be 1 less" +
+                "than the total");
     }
 
     private List<AcidNationRow> readFullFile(ConnectorPageSource pageSource, boolean resultsNeeded)

@@ -14,6 +14,7 @@
 package io.prestosql.plugin.hive.acid;
 
 import com.google.common.collect.ImmutableList;
+import io.prestosql.plugin.hive.AcidInfo;
 import io.prestosql.plugin.hive.FileFormatDataSourceStats;
 import io.prestosql.plugin.hive.HdfsEnvironment;
 import io.prestosql.plugin.hive.HiveColumnHandle;
@@ -60,12 +61,14 @@ public class AcidPageProcessorProvider
     {
     }
 
-    public static ConnectorPageSource getAcidPageSource(String fileName, List<String> columnNames, List<Type> columnTypes)
+    public static ConnectorPageSource getAcidPageSource(String fileName, List<String> columnNames, List<Type> columnTypes,
+                                                        Optional<AcidInfo> acidInfo)
     {
-        return getAcidPageSource(fileName, columnNames, columnTypes, TupleDomain.all());
+        return getAcidPageSource(fileName, columnNames, columnTypes, TupleDomain.all(), acidInfo);
     }
 
-    public static ConnectorPageSource getAcidPageSource(String fileName, List<String> columnNames, List<Type> columnTypes, TupleDomain<HiveColumnHandle> tupleDomain)
+    public static ConnectorPageSource getAcidPageSource(String fileName, List<String> columnNames, List<Type> columnTypes,
+                                                        TupleDomain<HiveColumnHandle> tupleDomain, Optional<AcidInfo> acidInfo)
     {
         File targetFile = new File((Thread.currentThread().getContextClassLoader().getResource(fileName).getPath()));
         ImmutableList.Builder<HiveColumnHandle> builder = ImmutableList.builder();
@@ -75,7 +78,7 @@ public class AcidPageProcessorProvider
                     columnNames.get(i),
                     toHiveType(new HiveTypeTranslator(), columnType),
                     columnType.getTypeSignature(),
-                    0,
+                    i,
                     REGULAR,
                     Optional.empty()));
         }
@@ -97,7 +100,7 @@ public class AcidPageProcessorProvider
                 columns,
                 tupleDomain,
                 DateTimeZone.forID(SESSION.getTimeZoneKey().getId()),
-                Optional.empty()).get();
+                acidInfo).get();
     }
 
     private static Properties createSchema(HiveStorageFormat format, List<String> columnNames, List<Type> columnTypes)

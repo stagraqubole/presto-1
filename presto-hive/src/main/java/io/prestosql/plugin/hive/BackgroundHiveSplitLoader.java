@@ -44,6 +44,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.common.ValidTxnWriteIdList;
 import org.apache.hadoop.hive.ql.io.AcidUtils;
 import org.apache.hadoop.hive.ql.io.SymlinkTextInputFormat;
+import org.apache.hadoop.hive.shims.HadoopShims;
 import org.apache.hadoop.mapred.FileInputFormat;
 import org.apache.hadoop.mapred.FileSplit;
 import org.apache.hadoop.mapred.InputFormat;
@@ -409,29 +410,68 @@ public class BackgroundHiveSplitLoader
                             .getTableValidWriteIdList(table.getDatabaseName() + "." + table.getTableName()),
                     false,
                     true);
-            // delta directories
 
-            // First create Delete Deltas registry
-            DeleteDeltaLocations.Builder deleteDeltaLocationsBuilder = new DeleteDeltaLocations.Builder(path);
-            for (AcidUtils.ParsedDelta delta : directory.getCurrentDirectories()) {
-                if (delta.isDeleteDelta()) {
-                    deleteDeltaLocationsBuilder.addDeleteDelta(delta.getPath(), delta.getMinWriteId(), delta.getMaxWriteId(), delta.getStatementId());
-                }
+            if (AcidUtils.isInsertOnlyTable(table.getParameters())) {
+                addDeltaFiles(fs, splitFactory, splittable, directory, null);
+                addBaseFile(fs, splitFactory, splittable, directory, null);
+                addOriginalFiles(fs, splitFactory, splittable, directory.getOriginalFiles(), null);
             }
-            DeleteDeltaLocations deleteDeltaLocations = deleteDeltaLocationsBuilder.build();
+            else {
+                AcidInfo.Builder acidInfoBuilder = new AcidInfo.Builder(configuration, path, directory.getOriginalFiles());
+                // create Delete Deltas registry
+                acidInfoBuilder.deleteDeltaLocations(path, directory.getCurrentDirectories());
 
-            for (AcidUtils.ParsedDelta delta : directory.getCurrentDirectories()) {
-                if (!delta.isDeleteDelta()) {
-                    fileIterators.addLast(createInternalHiveSplitIterator(delta.getPath(), fs, splitFactory, splittable, Optional.of(deleteDeltaLocations)));
-                }
-            }
-
-            // base
-            if (directory.getBaseDirectory() != null) {
-                fileIterators.addLast(createInternalHiveSplitIterator(directory.getBaseDirectory(), fs, splitFactory, splittable, Optional.of(deleteDeltaLocations)));
+                addDeltaFiles(fs, splitFactory, splittable, directory, acidInfoBuilder);
+                addBaseFile(fs, splitFactory, splittable, directory, acidInfoBuilder);
+                addOriginalFiles(fs, splitFactory, splittable, directory.getOriginalFiles(), acidInfoBuilder);
             }
         }
         return COMPLETED_FUTURE;
+    }
+
+    private void addBaseFile(FileSystem fs, InternalHiveSplitFactory splitFactory, boolean splittable, AcidUtils.Directory directory, AcidInfo.Builder acidInfoBuilder)
+    {
+        if (directory.getBaseDirectory() != null) {
+            Optional<AcidInfo> acidInfo = Optional.empty();
+            if (acidInfoBuilder != null) {
+                acidInfo = Optional.of(acidInfoBuilder.build());
+            }
+            fileIterators.addLast(createInternalHiveSplitIterator(directory.getBaseDirectory(), fs, splitFactory,
+                    splittable, acidInfo));
+        }
+    }
+
+    private void addDeltaFiles(FileSystem fs, InternalHiveSplitFactory splitFactory, boolean splittable, AcidUtils.Directory directory, AcidInfo.Builder acidInfoBuilder)
+    {
+        if (directory.getCurrentDirectories() == null) {
+            return;
+        }
+        for (AcidUtils.ParsedDelta delta : directory.getCurrentDirectories()) {
+            if (!delta.isDeleteDelta()) {
+                Optional<AcidInfo> acidInfo = Optional.empty();
+                if (acidInfoBuilder != null) {
+                    acidInfo = Optional.of(acidInfoBuilder.build());
+                }
+                fileIterators.addLast(createInternalHiveSplitIterator(delta.getPath(), fs, splitFactory, splittable,
+                        acidInfo));
+            }
+        }
+    }
+
+    private void addOriginalFiles(FileSystem fs, InternalHiveSplitFactory splitFactory, boolean splittable,
+            List<HadoopShims.HdfsFileStatusWithId> originalFileLocations, AcidInfo.Builder acidInfoBuilder)
+    {
+        if (originalFileLocations == null || originalFileLocations.isEmpty()) {
+            return;
+        }
+        for (HadoopShims.HdfsFileStatusWithId hdfsFileStatusWithId : originalFileLocations) {
+            Path originalFilePath = hdfsFileStatusWithId.getFileStatus().getPath();
+            Optional<AcidInfo> acidInfo = Optional.empty();
+            if (acidInfoBuilder != null) {
+                acidInfo = Optional.of(acidInfoBuilder.build(originalFilePath));
+            }
+            fileIterators.addLast(createInternalHiveSplitIterator(originalFilePath, fs, splitFactory, splittable, acidInfo));
+        }
     }
 
     private ListenableFuture<?> addSplitsToSource(InputSplit[] targetSplits, InternalHiveSplitFactory splitFactory)
@@ -458,10 +498,10 @@ public class BackgroundHiveSplitLoader
                 .anyMatch(name -> name.equals("UseFileSplitsFromInputFormat"));
     }
 
-    private Iterator<InternalHiveSplit> createInternalHiveSplitIterator(Path path, FileSystem fileSystem, InternalHiveSplitFactory splitFactory, boolean splittable, Optional<DeleteDeltaLocations> deleteDetlaLocations)
+    private Iterator<InternalHiveSplit> createInternalHiveSplitIterator(Path path, FileSystem fileSystem, InternalHiveSplitFactory splitFactory, boolean splittable, Optional<AcidInfo> acidInfo)
     {
         return Streams.stream(new HiveFileIterator(table, path, fileSystem, directoryLister, namenodeStats, recursiveDirWalkerEnabled ? RECURSE : IGNORED))
-                .map(status -> splitFactory.createInternalHiveSplit(status, splittable, deleteDetlaLocations))
+                .map(status -> splitFactory.createInternalHiveSplit(status, splittable, acidInfo))
                 .filter(Optional::isPresent)
                 .map(Optional::get)
                 .iterator();

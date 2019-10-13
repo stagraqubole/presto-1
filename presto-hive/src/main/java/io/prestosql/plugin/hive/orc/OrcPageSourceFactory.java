@@ -24,7 +24,7 @@ import io.prestosql.orc.OrcReader;
 import io.prestosql.orc.OrcRecordReader;
 import io.prestosql.orc.TupleDomainOrcPredicate;
 import io.prestosql.orc.TupleDomainOrcPredicate.ColumnReference;
-import io.prestosql.plugin.hive.DeleteDeltaLocations;
+import io.prestosql.plugin.hive.AcidInfo;
 import io.prestosql.plugin.hive.FileFormatDataSourceStats;
 import io.prestosql.plugin.hive.HdfsEnvironment;
 import io.prestosql.plugin.hive.HiveColumnHandle;
@@ -111,13 +111,13 @@ public class OrcPageSourceFactory
             List<HiveColumnHandle> columns,
             TupleDomain<HiveColumnHandle> effectivePredicate,
             DateTimeZone hiveStorageTimeZone,
-            Optional<DeleteDeltaLocations> deleteDeltaLocations)
+            Optional<AcidInfo> acidInfo)
     {
         if (!isDeserializerClass(schema, OrcSerde.class)) {
             return Optional.empty();
         }
 
-        checkState(!deleteDeltaLocations.map(DeleteDeltaLocations::hadDeletedRows).orElse(false), "Delete Delta Locations should be empty");
+        checkState(!acidInfo.isPresent(), "Acid Info should be empty");
 
         boolean isFullAcid = AcidUtils.isFullAcidTable(((Map<String, String>) (((Map) schema))));
         if (isFullAcid) {
@@ -253,7 +253,7 @@ public class OrcPageSourceFactory
         return format("Error opening Hive split %s (offset=%s, length=%s): %s", path, start, length, t.getMessage());
     }
 
-    private static List<HiveColumnHandle> getPhysicalHiveColumnHandles(List<HiveColumnHandle> columns, boolean useOrcColumnNames, OrcReader reader, Path path)
+    public static List<HiveColumnHandle> getPhysicalHiveColumnHandles(List<HiveColumnHandle> columns, boolean useOrcColumnNames, OrcReader reader, Path path)
     {
         if (!useOrcColumnNames) {
             return columns;

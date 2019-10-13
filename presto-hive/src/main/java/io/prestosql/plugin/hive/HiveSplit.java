@@ -49,7 +49,7 @@ public class HiveSplit
     private final Map<Integer, HiveType> columnCoercions; // key: hiveColumnIndex
     private final Optional<BucketConversion> bucketConversion;
     private final boolean s3SelectPushdownEnabled;
-    private final Optional<DeleteDeltaLocations> deleteDetlaLocations;
+    private final Optional<AcidInfo> acidInfo;
 
     @JsonCreator
     public HiveSplit(
@@ -68,7 +68,7 @@ public class HiveSplit
             @JsonProperty("columnCoercions") Map<Integer, HiveType> columnCoercions,
             @JsonProperty("bucketConversion") Optional<BucketConversion> bucketConversion,
             @JsonProperty("s3SelectPushdownEnabled") boolean s3SelectPushdownEnabled,
-            @JsonProperty("deleteDetlaLocations") Optional<DeleteDeltaLocations> deleteDetlaLocations)
+            @JsonProperty("acidInfo") Optional<AcidInfo> acidInfo)
     {
         checkArgument(start >= 0, "start must be positive");
         checkArgument(length >= 0, "length must be positive");
@@ -83,7 +83,7 @@ public class HiveSplit
         requireNonNull(bucketNumber, "bucketNumber is null");
         requireNonNull(columnCoercions, "columnCoercions is null");
         requireNonNull(bucketConversion, "bucketConversion is null");
-        requireNonNull(deleteDetlaLocations, "deleteDeltaLocations is null");
+        requireNonNull(acidInfo, "acidInfo is null");
 
         this.database = database;
         this.table = table;
@@ -100,7 +100,7 @@ public class HiveSplit
         this.columnCoercions = columnCoercions;
         this.bucketConversion = bucketConversion;
         this.s3SelectPushdownEnabled = s3SelectPushdownEnabled;
-        this.deleteDetlaLocations = deleteDetlaLocations;
+        this.acidInfo = acidInfo;
     }
 
     @JsonProperty
@@ -201,9 +201,9 @@ public class HiveSplit
     }
 
     @JsonProperty
-    public Optional<DeleteDeltaLocations> getDeleteDetlaLocations()
+    public Optional<AcidInfo> getAcidInfo()
     {
-        return deleteDetlaLocations;
+        return acidInfo;
     }
 
     @Override

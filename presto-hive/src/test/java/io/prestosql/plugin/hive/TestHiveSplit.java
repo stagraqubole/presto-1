@@ -47,7 +47,14 @@ public class TestHiveSplit
         DeleteDeltaLocations.Builder deleteDeltaLocationsBuilder = new DeleteDeltaLocations.Builder(new Path("file:///data/fullacid"));
         deleteDeltaLocationsBuilder.addDeleteDelta(new Path("file:///data/fullacid/delete_delta_0000004_0000004_0000"), 4L, 4L, 0);
         deleteDeltaLocationsBuilder.addDeleteDelta(new Path("file:///data/fullacid/delete_delta_0000007_0000007_0000"), 7L, 7L, 0);
-        DeleteDeltaLocations deleteDeltaLocations = deleteDeltaLocationsBuilder.build();
+
+        AcidInfo.Builder acidInfoBuilder = new AcidInfo.Builder(new Path("path"));
+
+        OriginalFileLocations.Builder originalFileLocationsBuilder = new OriginalFileLocations.Builder(new Path("file:///data/fullacid"));
+        originalFileLocationsBuilder.addOriginalFileInfo("file:///data/fullacid/000000_0", 120);
+        originalFileLocationsBuilder.addOriginalFileInfo("file:///data/fullacid/000001_0", 125);
+        acidInfoBuilder.originalFileInfo(Optional.of(originalFileLocationsBuilder.build()));
+        acidInfoBuilder.deleteDeltaLocations(Optional.of(deleteDeltaLocationsBuilder.build()));
 
         HiveSplit expected = new HiveSplit(
                 "db",
@@ -68,7 +75,7 @@ public class TestHiveSplit
                         16,
                         ImmutableList.of(new HiveColumnHandle("col", HIVE_LONG, BIGINT.getTypeSignature(), 5, ColumnType.REGULAR, Optional.of("comment"))))),
                 false,
-                Optional.of(deleteDeltaLocations));
+                Optional.of(acidInfoBuilder.build()));
 
         String json = codec.toJson(expected);
         HiveSplit actual = codec.fromJson(json);
@@ -87,6 +94,7 @@ public class TestHiveSplit
         assertEquals(actual.getBucketConversion(), expected.getBucketConversion());
         assertEquals(actual.isForceLocalScheduling(), expected.isForceLocalScheduling());
         assertEquals(actual.isS3SelectPushdownEnabled(), expected.isS3SelectPushdownEnabled());
-        assertEquals(actual.getDeleteDetlaLocations().get(), expected.getDeleteDetlaLocations().get());
+        assertEquals(actual.getAcidInfo().get().getDeleteDeltaLocations().get(), expected.getAcidInfo().get().getDeleteDeltaLocations().get());
+        assertEquals(actual.getAcidInfo().get().getOriginalFileLocations().get(), expected.getAcidInfo().get().getOriginalFileLocations().get());
     }
 }

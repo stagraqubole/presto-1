@@ -25,6 +25,7 @@ import io.prestosql.orc.OrcReader;
 import io.prestosql.orc.OrcRecordReader;
 import io.prestosql.orc.TupleDomainOrcPredicate;
 import io.prestosql.orc.metadata.OrcType;
+import io.prestosql.plugin.hive.AcidInfo;
 import io.prestosql.plugin.hive.DeleteDeltaLocations;
 import io.prestosql.plugin.hive.FileFormatDataSourceStats;
 import io.prestosql.plugin.hive.HdfsEnvironment;
@@ -91,6 +92,7 @@ public class AcidOrcPageSourceFactory
     private final OrcPageSourceFactory orcPageSourceFactory;
     private final DataSize deletedRowsCacheSize;
     private final Duration deletedRowsCacheTTL;
+    private static boolean useOrcColumnNames;
 
     @Inject
     public AcidOrcPageSourceFactory(TypeManager typeManager, HiveConfig config, HdfsEnvironment hdfsEnvironment, FileFormatDataSourceStats stats, OrcPageSourceFactory orcPageSourceFactory)
@@ -101,6 +103,7 @@ public class AcidOrcPageSourceFactory
         this.orcPageSourceFactory = orcPageSourceFactory;
         this.deletedRowsCacheSize = config.getDeleteDeltaCacheSize();
         this.deletedRowsCacheTTL = config.getDeleteDeltaCacheTTL();
+        this.useOrcColumnNames = requireNonNull(config, "config is null").isUseOrcColumnNames();
     }
 
     @Override
@@ -115,7 +118,7 @@ public class AcidOrcPageSourceFactory
             List<HiveColumnHandle> columns,
             TupleDomain<HiveColumnHandle> effectivePredicate,
             DateTimeZone hiveStorageTimeZone,
-            Optional<DeleteDeltaLocations> deleteDeltaLocations)
+            Optional<AcidInfo> acidInfo)
     {
         if (!isDeserializerClass(schema, OrcSerde.class)) {
             return Optional.empty();
@@ -155,7 +158,7 @@ public class AcidOrcPageSourceFactory
                 stats,
                 deletedRowsCacheSize,
                 deletedRowsCacheTTL,
-                deleteDeltaLocations));
+                acidInfo));
     }
 
     public static ConnectorPageSource createAcidOrcPageSource(
@@ -182,9 +185,11 @@ public class AcidOrcPageSourceFactory
             FileFormatDataSourceStats stats,
             DataSize deletedRowsCacheSize,
             Duration deletedRowsCacheTTL,
-            Optional<DeleteDeltaLocations> deleteDeltaLocations)
+            Optional<AcidInfo> acidInfo)
     {
         OrcDataSource orcDataSource;
+
+        boolean originalFilesPresent = acidInfo.isPresent() && acidInfo.get().getOriginalFileLocations().isPresent();
         try {
             FileSystem fileSystem = hdfsEnvironment.getFileSystem(sessionUser, path, configuration);
             FSDataInputStream inputStream = fileSystem.open(path);
@@ -209,11 +214,11 @@ public class AcidOrcPageSourceFactory
         AggregatedMemoryContext systemMemoryUsage = newSimpleAggregatedMemoryContext();
         try {
             OrcReader reader = new OrcReader(orcDataSource, maxMergeDistance, tinyStripeThreshold, maxReadBlockSize);
-
             // We need meta columns to created rowIds if there are delete deltas present
-            boolean deletedRowsPresent = deleteDeltaLocations.map(DeleteDeltaLocations::hadDeletedRows).orElse(false);
+            boolean deletedRowsPresent = acidInfo.isPresent() && acidInfo.get().getDeleteDeltaLocations().map(DeleteDeltaLocations::hadDeletedRows).orElse(false);
 
-            List<HiveColumnHandle> physicalColumns = getPhysicalHiveColumnHandlesAcid(columns, reader, path, deletedRowsPresent);
+            List<HiveColumnHandle> physicalColumns = originalFilesPresent ? OrcPageSourceFactory.getPhysicalHiveColumnHandles(columns, useOrcColumnNames, reader, path) :
+                    getPhysicalHiveColumnHandlesAcid(columns, reader, path, deletedRowsPresent);
             ImmutableMap.Builder<Integer, Type> includedColumns = ImmutableMap.builder();
             ImmutableList.Builder<ColumnReference<HiveColumnHandle>> columnReferences = ImmutableList.builder();
             for (HiveColumnHandle column : physicalColumns) {
@@ -225,7 +230,7 @@ public class AcidOrcPageSourceFactory
             }
 
             // effective predicate should be updated to have new column index in the Domain because data columns are now shifted by 5 positions
-            if (effectivePredicate.getDomains().isPresent()) {
+            if (!originalFilesPresent && effectivePredicate.getDomains().isPresent()) {
                 Map<HiveColumnHandle, Domain> predicateDomain = effectivePredicate.getDomains().get();
                 ImmutableMap.Builder<HiveColumnHandle, Domain> newPredicateDomain = ImmutableMap.builder();
                 for (Map.Entry<HiveColumnHandle, Domain> entry : predicateDomain.entrySet()) {
@@ -250,7 +255,7 @@ public class AcidOrcPageSourceFactory
                     hiveStorageTimeZone,
                     systemMemoryUsage,
                     INITIAL_BATCH_SIZE,
-                    true);
+                    !originalFilesPresent);
 
             if (!deletedRowsPresent) {
                 return new OrcPageSource(
@@ -277,7 +282,7 @@ public class AcidOrcPageSourceFactory
                     stats,
                     deletedRowsCacheSize,
                     deletedRowsCacheTTL,
-                    deleteDeltaLocations);
+                    acidInfo);
         }
         catch (Exception e) {
             try {

@@ -13,6 +13,7 @@
  */
 package io.prestosql.plugin.hive.acid;
 
+import io.prestosql.plugin.hive.AcidInfo;
 import io.prestosql.plugin.hive.DeleteDeltaLocations;
 import io.prestosql.plugin.hive.FileFormatDataSourceStats;
 import io.prestosql.plugin.hive.orc.OrcPageSourceFactory;
@@ -151,6 +152,6 @@ public class TestDeletedRowsRegistry
                 HDFS_ENVIRONMENT,
                 CONFIG.getDeleteDeltaCacheSize(),
                 CONFIG.getDeleteDeltaCacheTTL(),
-                deleteDeltaLocations);
+                Optional.of(new AcidInfo.Builder(inputSplitPath).deleteDeltaLocations(deleteDeltaLocations).bucketId(Optional.of(0L)).build()));
     }
 }

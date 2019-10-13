@@ -23,6 +23,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
+import io.prestosql.plugin.hive.AcidInfo;
 import io.prestosql.plugin.hive.DeleteDeltaLocations;
 import io.prestosql.plugin.hive.HdfsEnvironment;
 import io.prestosql.plugin.hive.HiveColumnHandle;
@@ -107,7 +108,7 @@ public class DeletedRowsRegistry
             HdfsEnvironment hdfsEnvironment,
             DataSize cacheSize,
             Duration cacheTTL,
-            Optional<DeleteDeltaLocations> deleteDeltaLocations)
+            Optional<AcidInfo> acidInfo)
             throws ExecutionException
     {
         if (cache == null) {
@@ -129,7 +130,7 @@ public class DeletedRowsRegistry
             }
         }
 
-        this.deltedRowsPresent = deleteDeltaLocations.map(DeleteDeltaLocations::hadDeletedRows).orElse(false);
+        this.deltedRowsPresent = acidInfo.isPresent() && acidInfo.get().getDeleteDeltaLocations().map(DeleteDeltaLocations::hadDeletedRows).orElse(false);
 
         if (!deltedRowsPresent) {
             loaders = EMPTY_LOADERS;
@@ -138,16 +139,22 @@ public class DeletedRowsRegistry
             ImmutableList.Builder<DeletedRowsLoader> loaders = ImmutableList.builder();
 
             // First list all the delete delta files using fileStatusCache
-            String partitionLocation = deleteDeltaLocations.get().getPartitionLocation();
+            String partitionLocation = acidInfo.get().getDeleteDeltaLocations().get().getPartitionLocation();
 
             List<LocatedFileStatus> deleteDeltaFiles = fileStatusCache.get(session.getQueryId() + partitionLocation,
-                    () -> listDeltaFiles(deleteDeltaLocations.get(), hdfsEnvironment, session, configuration));
+                    () -> listDeltaFiles(acidInfo.get().getDeleteDeltaLocations().get(), hdfsEnvironment, session, configuration));
 
             // Now filter out only the delete delta files which have same name as split's file.
             ImmutableList.Builder usefulDeleteDeltaFiles = ImmutableList.builder();
             for (LocatedFileStatus fileStatus : deleteDeltaFiles) {
-                if (fileStatus.getPath().getName().equals(splitPath.getName())) {
-                    usefulDeleteDeltaFiles.add(fileStatus);
+                Path deleteDeltaPath = fileStatus.getPath();
+                try {
+                    if (acidInfo.get().isSameBucket(splitPath, deleteDeltaPath, configuration)) {
+                        usefulDeleteDeltaFiles.add(fileStatus);
+                    }
+                }
+                catch (IOException e) {
+                    throw new PrestoException(HIVE_UNKNOWN_ERROR, String.format("Error in comparing the bucket IDs of split: %s and delete delta file: %s: ", splitPath, deleteDeltaPath), e);
                 }
             }
 
@@ -205,9 +212,7 @@ public class DeletedRowsRegistry
             validPositions = new int[positions];
         }
 
-        if (deletedRows.get() == null) {
-            deletedRows.set(loadDeletedRows());
-        }
+        loadDeletedRowsIfAbsent();
         int index = 0;
         for (int position = 0; position < positions; position++) {
             if (!deletedRows.get().contains(createRowId(input, position))) {
@@ -215,6 +220,19 @@ public class DeletedRowsRegistry
             }
         }
         return new ValidPositions(validPositions, index);
+    }
+
+    public AtomicReference<Set<RowId>> getDeletedRows()
+    {
+        loadDeletedRowsIfAbsent();
+        return deletedRows;
+    }
+
+    private void loadDeletedRowsIfAbsent()
+    {
+        if (deletedRows.get() == null) {
+            deletedRows.set(loadDeletedRows());
+        }
     }
 
     private String getCacheKey(String queryId, String partitionLocation, String splitFilename)

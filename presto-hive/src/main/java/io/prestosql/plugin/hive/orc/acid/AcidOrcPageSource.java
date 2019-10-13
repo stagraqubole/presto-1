@@ -18,6 +18,7 @@ import io.airlift.units.Duration;
 import io.prestosql.memory.context.AggregatedMemoryContext;
 import io.prestosql.orc.OrcDataSource;
 import io.prestosql.orc.OrcRecordReader;
+import io.prestosql.plugin.hive.AcidInfo;
 import io.prestosql.plugin.hive.DeleteDeltaLocations;
 import io.prestosql.plugin.hive.FileFormatDataSourceStats;
 import io.prestosql.plugin.hive.HdfsEnvironment;
@@ -50,6 +51,10 @@ public class AcidOrcPageSource
         extends OrcPageSource
 {
     private DeletedRowsRegistry deletedRowsRegistry;
+    private boolean originalFilesPresent;
+    private OriginalFilesRegistry originalFilesRegistry;
+    // Row ID relative to all the original files of the same bucket ID before this file in lexicographic order
+    private long originalFileRowId;
 
     public AcidOrcPageSource(
             Path splitPath,
@@ -66,14 +71,16 @@ public class AcidOrcPageSource
             FileFormatDataSourceStats stats,
             DataSize deletedRowsCacheSize,
             Duration deletedRowsCacheTTL,
-            Optional<DeleteDeltaLocations> deleteDeltaLocations)
+            Optional<AcidInfo> acidInfo)
             throws ExecutionException
     {
         super(recordReader, orcDataSource, columns, typeManager, systemMemoryContext, stats);
 
-        checkState(
-                deleteDeltaLocations.map(DeleteDeltaLocations::hadDeletedRows).orElse(false),
+        checkState(acidInfo.isPresent() &&
+                acidInfo.get().getDeleteDeltaLocations().map(DeleteDeltaLocations::hadDeletedRows).orElse(false),
                 "OrcPageSource should be used when there are no deleted rows");
+
+        originalFilesPresent = acidInfo.isPresent() && acidInfo.get().getOriginalFileLocations().isPresent();
 
         deletedRowsRegistry = new DeletedRowsRegistry(
                 splitPath,
@@ -84,7 +91,14 @@ public class AcidOrcPageSource
                 hdfsEnvironment,
                 deletedRowsCacheSize,
                 deletedRowsCacheTTL,
-                deleteDeltaLocations);
+                acidInfo);
+
+        if (originalFilesPresent) {
+            originalFilesRegistry = new OriginalFilesRegistry(acidInfo.get().getOriginalFileLocations().get().getOriginalFiles(),
+                    splitPath.getParent().toString(),
+                    hdfsEnvironment, session, configuration, stats);
+            originalFileRowId = originalFilesRegistry.getRowCount(splitPath);
+        }
     }
 
     @Override
@@ -94,6 +108,24 @@ public class AcidOrcPageSource
 
         if (page == null) {
             return page;
+        }
+
+        if (originalFilesPresent) {
+            // To compare row ID of an original file with delete delta, we need to calculate the overall startRowID of
+            // this page.
+            // originalFileRowId -> starting row ID of the current original file.
+            // recordReader.getFilePosition() -> returns the position in the current original file.
+            // startRowID -> {Total number of rows before this original file} + {Row number in current file}
+            long startRowID = originalFileRowId + recordReader.getFilePosition();
+
+            ValidPositions validPositions = originalFilesRegistry.getValidPositions(deletedRowsRegistry.getDeletedRows(), page.getPositionCount(), startRowID);
+            Block[] dataBlocks = new Block[page.getChannelCount()];
+            int colIdx = 0;
+            for (int i = 0; i < page.getChannelCount(); i++) {
+                // LazyBlock is required to prevent DictionaryBlock from loading the dictionary block in constructor via getRetainedSize
+                dataBlocks[colIdx++] = new LazyBlock(validPositions.getPositionCount(), new AcidOrcBlockLoader(validPositions, page.getBlock(i)));
+            }
+            return new Page(validPositions.getPositionCount(), dataBlocks);
         }
 
         ValidPositions validPositions = deletedRowsRegistry.getValidPositions(
