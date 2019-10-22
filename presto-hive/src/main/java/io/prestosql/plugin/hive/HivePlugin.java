@@ -29,6 +29,7 @@ public class HivePlugin
 {
     private final String name;
     private final Optional<HiveMetastore> metastore;
+    private final RubixServices rubixServices = new RubixServices();
 
     public HivePlugin(String name)
     {
@@ -45,6 +46,6 @@ public class HivePlugin
     @Override
     public Iterable<ConnectorFactory> getConnectorFactories()
     {
-        return ImmutableList.of(new HiveConnectorFactory(name, HivePlugin.class.getClassLoader(), metastore));
+        return ImmutableList.of(new HiveConnectorFactory(name, HivePlugin.class.getClassLoader(), metastore, rubixServices));
     }
 }

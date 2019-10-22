@@ -80,7 +80,8 @@ public final class HiveBenchmarkQueryRunner
         HiveConnectorFactory hiveConnectorFactory = new HiveConnectorFactory(
                 "hive",
                 HiveBenchmarkQueryRunner.class.getClassLoader(),
-                Optional.of(metastore));
+                Optional.of(metastore),
+                new RubixServices());
 
         Map<String, String> hiveCatalogConfig = ImmutableMap.<String, String>builder()
                 .put("hive.max-split-size", "10GB")

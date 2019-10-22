@@ -58,6 +58,7 @@
         <dep.logback.version>1.2.3</dep.logback.version>
         <dep.jmxutils.version>1.21</dep.jmxutils.version>
         <dep.gcs.version>2.0.0</dep.gcs.version>
+        <rubix.version>0.3.6-SNAPSHOT</rubix.version>
 
         <!--
           America/Bahia_Banderas has:
@@ -1206,6 +1207,12 @@
                 <groupId>org.checkerframework</groupId>
                 <artifactId>checker-qual</artifactId>
                 <version>2.8.2</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.qubole.rubix</groupId>
+                <artifactId>rubix-shaded</artifactId>
+                <version>${rubix.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

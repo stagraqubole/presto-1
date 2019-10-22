@@ -26,6 +26,9 @@ import io.prestosql.plugin.hive.authentication.HiveAuthenticationModule;
 import io.prestosql.plugin.hive.gcs.HiveGcsModule;
 import io.prestosql.plugin.hive.metastore.HiveMetastore;
 import io.prestosql.plugin.hive.metastore.HiveMetastoreModule;
+import io.prestosql.plugin.hive.rubix.RubixConfig;
+import io.prestosql.plugin.hive.rubix.RubixInitializer;
+import io.prestosql.plugin.hive.rubix.RubixModule;
 import io.prestosql.plugin.hive.s3.HiveS3Module;
 import io.prestosql.plugin.hive.security.HiveSecurityModule;
 import io.prestosql.plugin.hive.security.SystemTableAwareAccessControl;
@@ -65,13 +68,15 @@ public class HiveConnectorFactory
     private final String name;
     private final ClassLoader classLoader;
     private final Optional<HiveMetastore> metastore;
+    private final RubixServices rubixServices;
 
-    public HiveConnectorFactory(String name, ClassLoader classLoader, Optional<HiveMetastore> metastore)
+    public HiveConnectorFactory(String name, ClassLoader classLoader, Optional<HiveMetastore> metastore, RubixServices rubixServices)
     {
         checkArgument(!isNullOrEmpty(name), "name is null or empty");
         this.name = name;
         this.classLoader = requireNonNull(classLoader, "classLoader is null");
         this.metastore = requireNonNull(metastore, "metastore is null");
+        this.rubixServices = requireNonNull(rubixServices, "rubixServices is null");
     }
 
     @Override
@@ -100,6 +105,7 @@ public class HiveConnectorFactory
                     new HiveModule(),
                     new HiveS3Module(),
                     new HiveGcsModule(),
+                    new RubixModule(),
                     new HiveMetastoreModule(metastore),
                     new HiveSecurityModule(),
                     new HiveAuthenticationModule(),
@@ -120,6 +126,12 @@ public class HiveConnectorFactory
                     .doNotInitializeLogging()
                     .setRequiredConfigurationProperties(config)
                     .initialize();
+
+            if (injector.getInstance(RubixConfig.class).isRubixEnabled()) {
+                // RubixInitializer needs ConfigurationInitializers, hence kept outside RubixModule
+                RubixInitializer rubixInitializer = injector.getInstance(RubixInitializer.class);
+                rubixInitializer.initializeRubix(context.getNodeManager(), rubixServices);
+            }
 
             LifeCycleManager lifeCycleManager = injector.getInstance(LifeCycleManager.class);
             HiveMetadataFactory metadataFactory = injector.getInstance(HiveMetadataFactory.class);

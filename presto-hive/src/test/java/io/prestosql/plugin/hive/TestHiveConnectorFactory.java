@@ -51,7 +51,8 @@ public class TestHiveConnectorFactory
         HiveConnectorFactory connectorFactory = new HiveConnectorFactory(
                 "hive-test",
                 HiveConnector.class.getClassLoader(),
-                Optional.empty());
+                Optional.empty(),
+                new RubixServices());
 
         Map<String, String> config = ImmutableMap.<String, String>builder()
                 .put("hive.metastore.uri", metastoreUri)
