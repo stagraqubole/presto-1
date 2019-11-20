@@ -13,26 +13,24 @@
  */
 package io.prestosql.tests.hive.acid;
 
-import io.prestosql.tempto.ProductTest;
+import io.prestosql.tests.hive.HiveProductTest;
+import org.testng.SkipException;
 import org.testng.annotations.Test;
-
-import java.sql.SQLException;
 
 import static io.prestosql.tempto.assertions.QueryAssert.assertThat;
 import static io.prestosql.tempto.query.QueryExecutor.query;
+import static io.prestosql.tests.TestGroups.HIVE_TRANSACTIONAL;
 import static io.prestosql.tests.TestGroups.STORAGE_FORMATS;
-import static io.prestosql.tests.hive.acid.HiveHelper.canRunAcidTests;
 import static io.prestosql.tests.utils.QueryExecutors.onHive;
 
 public class TestFullAcidTableRead
-        extends ProductTest
+        extends HiveProductTest
 {
-    @Test(groups = STORAGE_FORMATS)
+    @Test(groups = {STORAGE_FORMATS, HIVE_TRANSACTIONAL})
     public void testRead()
-            throws SQLException
     {
-        if (!canRunAcidTests()) {
-            return;
+        if (getHiveVersionMajor() < 3) {
+            throw new SkipException("Presto Hive transactional tables are supported with Hive version 3 or above");
         }
 
         String tableName = "full_acid_read";
