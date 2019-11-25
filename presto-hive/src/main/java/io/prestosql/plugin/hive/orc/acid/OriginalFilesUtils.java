@@ -42,8 +42,9 @@ import static io.prestosql.plugin.hive.HiveSessionProperties.getOrcMaxBufferSize
 import static io.prestosql.plugin.hive.HiveSessionProperties.getOrcMaxMergeDistance;
 import static io.prestosql.plugin.hive.HiveSessionProperties.getOrcStreamBufferSize;
 import static io.prestosql.plugin.hive.OriginalFileLocations.OriginalFileInfo;
+import static java.util.Objects.requireNonNull;
 
-public class OriginalFilesRegistry
+public class OriginalFilesUtils
 {
     private static final Map<String, Long> originalFileRows = new ConcurrentHashMap<>();
     private final List<OriginalFileInfo> originalFileNames;
@@ -53,18 +54,18 @@ public class OriginalFilesRegistry
     private final FileFormatDataSourceStats stats;
     private final String partitionLocation;
 
-    public OriginalFilesRegistry(List<OriginalFileInfo> originalFileNames,
+    public OriginalFilesUtils(List<OriginalFileInfo> originalFileNames,
                                  String partitionLocation, HdfsEnvironment hdfsEnvironment,
                                  ConnectorSession session,
                                  Configuration configuration,
                                  FileFormatDataSourceStats stats)
     {
-        this.originalFileNames = originalFileNames;
-        this.hdfsEnvironment = hdfsEnvironment;
-        this.session = session;
-        this.configuration = configuration;
-        this.stats = stats;
-        this.partitionLocation = partitionLocation;
+        this.originalFileNames = requireNonNull(originalFileNames, "originalFileNames is null");
+        this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
+        this.session = requireNonNull(session, "session is null");
+        this.configuration = requireNonNull(configuration, "configuration is null");
+        this.stats = requireNonNull(stats, "stats is null");
+        this.partitionLocation = requireNonNull(partitionLocation, "partitionLocation is null");
     }
 
     /**
@@ -114,14 +115,14 @@ public class OriginalFilesRegistry
     {
         long rowCount = 0;
         for (OriginalFileInfo originalFileInfo : originalFileNames) {
-            Path path = new Path(originalFileInfo.getPath());
+            Path path = new Path(this.partitionLocation + "/" + originalFileInfo.getName());
             try {
                 // Check if the file belongs to the same bucket and comes before 'reqPath' in lexicographic order.
                 if (isSameBucket(reqPath, path, configuration) && path.compareTo(reqPath) < 0) {
-                    if (!originalFileRows.containsKey(originalFileInfo.getPath())) {
-                        originalFileRows.put(originalFileInfo.getPath(), getRowsInFile(path, originalFileInfo.getFileSize()));
+                    if (!originalFileRows.containsKey(originalFileInfo.getName())) {
+                        originalFileRows.put(originalFileInfo.getName(), getRowsInFile(path, originalFileInfo.getFileSize()));
                     }
-                    rowCount += originalFileRows.get(originalFileInfo.getPath());
+                    rowCount += originalFileRows.get(originalFileInfo.getName());
                 }
             }
             catch (IOException e) {

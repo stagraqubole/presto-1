@@ -16,17 +16,17 @@ package io.prestosql.plugin.hive;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
-import org.apache.hadoop.fs.Path;
 
 import java.util.List;
 import java.util.Objects;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
+import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 
 /**
  * Stores original files related information.
- * To calculate the correct starting row ID of an original file, OriginalFilesRegistry needs originalFiles list.
+ * To calculate the correct starting row ID of an original file, OriginalFilesUtils needs originalFiles list.
  */
 public class OriginalFileLocations
 {
@@ -37,8 +37,8 @@ public class OriginalFileLocations
     public OriginalFileLocations(@JsonProperty("partitionLocation") String partitionLocation,
                                  @JsonProperty("originalFiles") List<OriginalFileInfo> originalFiles)
     {
-        this.partitionLocation = requireNonNull(partitionLocation);
-        this.originalFiles = ImmutableList.copyOf(requireNonNull(originalFiles));
+        this.partitionLocation = requireNonNull(partitionLocation, "partitionLocation is null");
+        this.originalFiles = ImmutableList.copyOf(requireNonNull(originalFiles, "originalFiles is null"));
     }
 
     @JsonProperty
@@ -84,21 +84,22 @@ public class OriginalFileLocations
 
     public static class OriginalFileInfo
     {
-        private final String path;
+        private final String name;
         private final long fileSize;
 
         @JsonCreator
-        public OriginalFileInfo(@JsonProperty("path") String path,
+        public OriginalFileInfo(@JsonProperty("name") String name,
                                 @JsonProperty("fileSize") long fileSize)
         {
-            this.path = path;
+            this.name = requireNonNull(name, "name is null");
+            checkArgument(fileSize > 0, "fileSize should be > 0");
             this.fileSize = fileSize;
         }
 
         @JsonProperty
-        public String getPath()
+        public String getName()
         {
-            return path;
+            return name;
         }
 
         @JsonProperty
@@ -118,44 +119,22 @@ public class OriginalFileLocations
             }
             OriginalFileInfo that = (OriginalFileInfo) o;
             return fileSize == that.fileSize &&
-                    Objects.equals(path, that.path);
+                    Objects.equals(name, that.name);
         }
 
         @Override
         public int hashCode()
         {
-            return Objects.hash(path, fileSize);
+            return Objects.hash(name, fileSize);
         }
 
         @Override
         public String toString()
         {
             return toStringHelper(this)
-                    .add("path", path)
+                    .add("name", name)
                     .add("fileSize", fileSize)
                     .toString();
-        }
-    }
-
-    public static class Builder
-    {
-        private final String partitionLocation;
-        private final ImmutableList.Builder originalFileInfoBuilder;
-
-        public Builder(Path partitionPath)
-        {
-            partitionLocation = partitionPath.toString();
-            originalFileInfoBuilder = new ImmutableList.Builder();
-        }
-
-        public void addOriginalFileInfo(String path, long size)
-        {
-            originalFileInfoBuilder.add(new OriginalFileInfo(path, size));
-        }
-
-        public OriginalFileLocations build()
-        {
-            return new OriginalFileLocations(partitionLocation, originalFileInfoBuilder.build());
         }
     }
 }

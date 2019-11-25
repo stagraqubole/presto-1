@@ -21,6 +21,8 @@ import io.prestosql.spi.HostAddress;
 import org.apache.hadoop.fs.Path;
 import org.testng.annotations.Test;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Properties;
@@ -50,10 +52,12 @@ public class TestHiveSplit
 
         AcidInfo.Builder acidInfoBuilder = new AcidInfo.Builder(new Path("path"));
 
-        OriginalFileLocations.Builder originalFileLocationsBuilder = new OriginalFileLocations.Builder(new Path("file:///data/fullacid"));
-        originalFileLocationsBuilder.addOriginalFileInfo("file:///data/fullacid/000000_0", 120);
-        originalFileLocationsBuilder.addOriginalFileInfo("file:///data/fullacid/000001_0", 125);
-        acidInfoBuilder.originalFileInfo(Optional.of(originalFileLocationsBuilder.build()));
+        List<OriginalFileLocations.OriginalFileInfo> originalFileInfos = new ArrayList<>();
+        originalFileInfos.add(new OriginalFileLocations.OriginalFileInfo("000000_0", 120));
+        originalFileInfos.add(new OriginalFileLocations.OriginalFileInfo("000001_0", 125));
+        OriginalFileLocations originalFileLocations = new OriginalFileLocations("file:///data/fullacid", originalFileInfos);
+
+        acidInfoBuilder.originalFileInfo(Optional.of(originalFileLocations));
         acidInfoBuilder.deleteDeltaLocations(Optional.of(deleteDeltaLocationsBuilder.build()));
 
         HiveSplit expected = new HiveSplit(

@@ -33,6 +33,7 @@ import org.apache.hadoop.fs.Path;
 import org.testng.annotations.Test;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -157,11 +158,13 @@ public class TestAcidPageSource
         DeleteDeltaLocations.Builder deleteDeltaLocationsBuilder = new DeleteDeltaLocations.Builder(new Path(tablePath));
         deleteDeltaLocationsBuilder.addDeleteDelta(new Path(tablePath + "/delete_delta_10000001_10000001_0000"), 10000001, 10000001, 0);
 
-        OriginalFileLocations.Builder originalFileLocationsBuilder = new OriginalFileLocations.Builder(new Path(tablePath));
-        originalFileLocationsBuilder.addOriginalFileInfo(tablePath + "/000000_0", 1780);
+        List<OriginalFileLocations.OriginalFileInfo> originalFileInfos = new ArrayList<>();
+        originalFileInfos.add(new OriginalFileLocations.OriginalFileInfo("000000_0", 1780));
+
+        OriginalFileLocations originalFileLocations = new OriginalFileLocations(tablePath, originalFileInfos);
 
         AcidInfo acidInfo = new AcidInfo(Optional.of(deleteDeltaLocationsBuilder.build()),
-                Optional.of(originalFileLocationsBuilder.build()), Optional.of(0L));
+                Optional.of(originalFileLocations), Optional.of(0L));
         ConnectorPageSource pageSource = AcidPageProcessorProvider.getAcidPageSource(tableName + "/000000_0", columnNames, columnTypes, Optional.of(acidInfo));
         List<AcidNationRow> rows = readFileCols(pageSource, columnNames, columnTypes, true, 24);
 

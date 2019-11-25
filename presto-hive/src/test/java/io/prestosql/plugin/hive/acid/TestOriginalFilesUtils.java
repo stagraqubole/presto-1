@@ -21,7 +21,7 @@ import io.prestosql.plugin.hive.OrcFileWriterConfig;
 import io.prestosql.plugin.hive.OriginalFileLocations;
 import io.prestosql.plugin.hive.ParquetFileWriterConfig;
 import io.prestosql.plugin.hive.orc.acid.DeletedRowsRegistry;
-import io.prestosql.plugin.hive.orc.acid.OriginalFilesRegistry;
+import io.prestosql.plugin.hive.orc.acid.OriginalFilesUtils;
 import io.prestosql.plugin.hive.orc.acid.ValidPositions;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.testing.TestingConnectorSession;
@@ -40,7 +40,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static io.prestosql.plugin.hive.HiveTestUtils.createTestHdfsEnvironment;
 import static org.testng.Assert.assertTrue;
 
-public class TestOriginalFilesRegistry
+public class TestOriginalFilesUtils
 {
     private static final HiveConfig CONFIG = new HiveConfig();
     private static final HdfsEnvironment HDFS_ENVIRONMENT = createTestHdfsEnvironment(CONFIG);
@@ -52,35 +52,36 @@ public class TestOriginalFilesRegistry
     private static final ConnectorSession SESSION = new TestingConnectorSession(
             new HiveSessionProperties(new HiveConfig(), new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
 
-    private OriginalFilesRegistry originalFilesRegistry;
-
     @BeforeClass
     public void setup()
     {
         config.set("fs.file.impl", "org.apache.hadoop.fs.RawLocalFileSystem");
-        List<OriginalFileLocations.OriginalFileInfo> originalFileInfos = new ArrayList<>();
-
-        originalFileInfos.add(new OriginalFileLocations.OriginalFileInfo(tablePath + "/000000_0", 730));
-        originalFileInfos.add(new OriginalFileLocations.OriginalFileInfo(tablePath + "/000001_0", 730));
-        originalFileInfos.add(new OriginalFileLocations.OriginalFileInfo(tablePath + "/000002_0", 741));
-        originalFileInfos.add(new OriginalFileLocations.OriginalFileInfo(tablePath + "/000002_0_copy_1", 768));
-        originalFileInfos.add(new OriginalFileLocations.OriginalFileInfo(tablePath + "/000002_0_copy_2", 743));
-
-        originalFilesRegistry = new OriginalFilesRegistry(originalFileInfos, partitionLocation, HDFS_ENVIRONMENT, SESSION, config, new FileFormatDataSourceStats());
     }
 
     @Test
     public void testGetRowCountSingleOriginalFileBucket()
     {
-        assertTrue(originalFilesRegistry.getRowCount(new Path(tablePath + "/000001_0")) == 0, "Original file should have 0 as the starting row count");
+        List<OriginalFileLocations.OriginalFileInfo> originalFileInfos = new ArrayList<>();
+
+        originalFileInfos.add(new OriginalFileLocations.OriginalFileInfo("000001_0", 730));
+
+        OriginalFilesUtils originalFilesUtils = new OriginalFilesUtils(originalFileInfos, partitionLocation, HDFS_ENVIRONMENT, SESSION, config, new FileFormatDataSourceStats());
+        assertTrue(originalFilesUtils.getRowCount(new Path(tablePath + "/000001_0")) == 0, "Original file should have 0 as the starting row count");
     }
 
     @Test
     public void testGetRowCountMultipleOriginalFilesBucket()
     {
+        List<OriginalFileLocations.OriginalFileInfo> originalFileInfos = new ArrayList<>();
+
+        originalFileInfos.add(new OriginalFileLocations.OriginalFileInfo("000002_0", 741));
+        originalFileInfos.add(new OriginalFileLocations.OriginalFileInfo("000002_0_copy_1", 768));
+        originalFileInfos.add(new OriginalFileLocations.OriginalFileInfo("000002_0_copy_2", 743));
+
+        OriginalFilesUtils originalFilesUtils = new OriginalFilesUtils(originalFileInfos, partitionLocation, HDFS_ENVIRONMENT, SESSION, config, new FileFormatDataSourceStats());
         // Bucket-2 has original files: 000002_0, 000002_0_copy_1. Each file original file has 4 rows.
         // So, starting row ID of 000002_0_copy_2 = row count of original files in Bucket-2 before it in lexicographic order.
-        assertTrue(originalFilesRegistry.getRowCount(new Path(tablePath + "/000002_0_copy_2")) == 8, "Original file 000002_0_copy_2 should have 8 as the starting row count");
+        assertTrue(originalFilesUtils.getRowCount(new Path(tablePath + "/000002_0_copy_2")) == 8, "Original file 000002_0_copy_2 should have 8 as the starting row count");
     }
 
     @Test
@@ -93,7 +94,15 @@ public class TestOriginalFilesRegistry
         int positions = 4;
         long startRowID = 0;
 
-        ValidPositions validPositions = originalFilesRegistry.getValidPositions(deletedRows, positions, startRowID);
+        List<OriginalFileLocations.OriginalFileInfo> originalFileInfos = new ArrayList<>();
+
+        originalFileInfos.add(new OriginalFileLocations.OriginalFileInfo("000002_0", 741));
+        originalFileInfos.add(new OriginalFileLocations.OriginalFileInfo("000002_0_copy_1", 768));
+        originalFileInfos.add(new OriginalFileLocations.OriginalFileInfo("000002_0_copy_2", 743));
+
+        OriginalFilesUtils originalFilesUtils = new OriginalFilesUtils(originalFileInfos, partitionLocation, HDFS_ENVIRONMENT, SESSION, config, new FileFormatDataSourceStats());
+
+        ValidPositions validPositions = originalFilesUtils.getValidPositions(deletedRows, positions, startRowID);
         assertTrue(validPositions.getPosition(0) == 0, "Error in fetching valid positions");
         assertTrue(validPositions.getPosition(1) == 1, "Error in fetching valid positions");
         assertTrue(validPositions.getPosition(2) == 3, "Row 2 is deleted so should not be present in valid positions");

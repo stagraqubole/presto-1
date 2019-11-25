@@ -52,7 +52,7 @@ public class AcidOrcPageSource
 {
     private DeletedRowsRegistry deletedRowsRegistry;
     private boolean originalFilesPresent;
-    private OriginalFilesRegistry originalFilesRegistry;
+    private OriginalFilesUtils originalFilesUtils;
     // Row ID relative to all the original files of the same bucket ID before this file in lexicographic order
     private long originalFileRowId;
 
@@ -94,10 +94,10 @@ public class AcidOrcPageSource
                 acidInfo);
 
         if (originalFilesPresent) {
-            originalFilesRegistry = new OriginalFilesRegistry(acidInfo.get().getOriginalFileLocations().get().getOriginalFiles(),
+            originalFilesUtils = new OriginalFilesUtils(acidInfo.get().getOriginalFileLocations().get().getOriginalFiles(),
                     splitPath.getParent().toString(),
                     hdfsEnvironment, session, configuration, stats);
-            originalFileRowId = originalFilesRegistry.getRowCount(splitPath);
+            originalFileRowId = originalFilesUtils.getRowCount(splitPath);
         }
     }
 
@@ -118,7 +118,7 @@ public class AcidOrcPageSource
             // startRowID -> {Total number of rows before this original file} + {Row number in current file}
             long startRowID = originalFileRowId + recordReader.getFilePosition();
 
-            ValidPositions validPositions = originalFilesRegistry.getValidPositions(deletedRowsRegistry.getDeletedRows(), page.getPositionCount(), startRowID);
+            ValidPositions validPositions = originalFilesUtils.getValidPositions(deletedRowsRegistry.getDeletedRows(), page.getPositionCount(), startRowID);
             Block[] dataBlocks = new Block[page.getChannelCount()];
             int colIdx = 0;
             for (int i = 0; i < page.getChannelCount(); i++) {

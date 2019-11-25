@@ -414,7 +414,7 @@ public class BackgroundHiveSplitLoader
             if (AcidUtils.isInsertOnlyTable(table.getParameters())) {
                 addDeltaFiles(fs, splitFactory, splittable, directory, null);
                 addBaseFile(fs, splitFactory, splittable, directory, null);
-                addOriginalFiles(fs, splitFactory, splittable, directory.getOriginalFiles(), null);
+                addOriginalFiles(configuration, fs, splitFactory, splittable, directory.getOriginalFiles(), null);
             }
             else {
                 AcidInfo.Builder acidInfoBuilder = new AcidInfo.Builder(configuration, path, directory.getOriginalFiles());
@@ -423,7 +423,7 @@ public class BackgroundHiveSplitLoader
 
                 addDeltaFiles(fs, splitFactory, splittable, directory, acidInfoBuilder);
                 addBaseFile(fs, splitFactory, splittable, directory, acidInfoBuilder);
-                addOriginalFiles(fs, splitFactory, splittable, directory.getOriginalFiles(), acidInfoBuilder);
+                addOriginalFiles(configuration, fs, splitFactory, splittable, directory.getOriginalFiles(), acidInfoBuilder);
             }
         }
         return COMPLETED_FUTURE;
@@ -458,17 +458,26 @@ public class BackgroundHiveSplitLoader
         }
     }
 
-    private void addOriginalFiles(FileSystem fs, InternalHiveSplitFactory splitFactory, boolean splittable,
+    private void addOriginalFiles(Configuration configuration, FileSystem fs, InternalHiveSplitFactory splitFactory, boolean splittable,
             List<HadoopShims.HdfsFileStatusWithId> originalFileLocations, AcidInfo.Builder acidInfoBuilder)
     {
         if (originalFileLocations == null || originalFileLocations.isEmpty()) {
             return;
         }
+        long index = 0;
         for (HadoopShims.HdfsFileStatusWithId hdfsFileStatusWithId : originalFileLocations) {
             Path originalFilePath = hdfsFileStatusWithId.getFileStatus().getPath();
             Optional<AcidInfo> acidInfo = Optional.empty();
             if (acidInfoBuilder != null) {
-                acidInfo = Optional.of(acidInfoBuilder.build(originalFilePath));
+                try {
+                    long bucketId = AcidUtils.parseBaseOrDeltaBucketFilename(originalFilePath, configuration).getBucketId();
+                    bucketId = (bucketId == -1) ? index : bucketId;
+                    acidInfo = Optional.of(acidInfoBuilder.bucketId(Optional.of(bucketId)).buildWithRequiredOriginalFiles());
+                    index++;
+                }
+                catch (IOException e) {
+                    throw new PrestoException(HIVE_UNKNOWN_ERROR, String.format("Error in fetching bucket ID of original file: %s", originalFilePath), e);
+                }
             }
             fileIterators.addLast(createInternalHiveSplitIterator(originalFilePath, fs, splitFactory, splittable, acidInfo));
         }
