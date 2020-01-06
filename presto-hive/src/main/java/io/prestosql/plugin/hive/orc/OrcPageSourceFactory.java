@@ -89,8 +89,15 @@ import static org.apache.hadoop.hive.ql.io.AcidUtils.isFullAcidTable;
 public class OrcPageSourceFactory
         implements HivePageSourceFactory
 {
+    // ACID format column names
+    public static String ACID_COLUMN_OPERATION = "operation";
+    public static String ACID_COLUMN_ORIGINAL_TRANSACTION = "originalTransaction";
+    public static String ACID_COLUMN_BUCKET = "bucket";
+    public static String ACID_COLUMN_ROW_ID = "rowId";
+    public static String ACID_COLUMN_CURRENT_TRANSACTION = "currentTransaction";
+    public static final String ACID_COLUMN_ROW_STRUCT = "row";
+
     private static final Pattern DEFAULT_HIVE_COLUMN_NAME_PATTERN = Pattern.compile("_col\\d+");
-    private static final int ACID_ROW_STRUCT_INDEX = 5;
     private final OrcReaderOptions orcReaderOptions;
     private final HdfsEnvironment hdfsEnvironment;
     private final FileFormatDataSourceStats stats;
@@ -205,7 +212,7 @@ public class OrcPageSourceFactory
             List<OrcColumn> fileColumns = reader.getRootColumn().getNestedColumns();
             if (isFullAcid) {
                 verifyAcidSchema(reader, path);
-                fileColumns = fileColumns.get(ACID_ROW_STRUCT_INDEX).getNestedColumns();
+                fileColumns = uniqueIndex(fileColumns, orcColumn -> orcColumn.getColumnName().toLowerCase(ENGLISH)).get(ACID_COLUMN_ROW_STRUCT).getNestedColumns();
             }
 
             Map<String, OrcColumn> fileColumnsByName = ImmutableMap.of();
@@ -302,16 +309,14 @@ public class OrcPageSourceFactory
     {
         OrcColumn rootColumn = orcReader.getRootColumn();
         if (rootColumn.getNestedColumns().size() != 6) {
-            throw new PrestoException(
-                    HIVE_BAD_DATA,
-                    format("ORC ACID file should have 6 columns: %s", path));
+            throw new PrestoException(HIVE_BAD_DATA, format("ORC ACID file should have 6 columns: %s", path));
         }
-        verifyAcidColumn(orcReader, 0, "operation", INT, path);
-        verifyAcidColumn(orcReader, 1, "originalTransaction", LONG, path);
-        verifyAcidColumn(orcReader, 2, "bucket", INT, path);
-        verifyAcidColumn(orcReader, 3, "rowId", LONG, path);
-        verifyAcidColumn(orcReader, 4, "currentTransaction", LONG, path);
-        verifyAcidColumn(orcReader, 5, "row", STRUCT, path);
+        verifyAcidColumn(orcReader, 0, ACID_COLUMN_OPERATION, INT, path);
+        verifyAcidColumn(orcReader, 1, ACID_COLUMN_ORIGINAL_TRANSACTION, LONG, path);
+        verifyAcidColumn(orcReader, 2, ACID_COLUMN_BUCKET, INT, path);
+        verifyAcidColumn(orcReader, 3, ACID_COLUMN_ROW_ID, LONG, path);
+        verifyAcidColumn(orcReader, 4, ACID_COLUMN_CURRENT_TRANSACTION, LONG, path);
+        verifyAcidColumn(orcReader, 5, ACID_COLUMN_ROW_STRUCT, STRUCT, path);
     }
 
     private static void verifyAcidColumn(OrcReader orcReader, int columnIndex, String columnName, OrcTypeKind columnType, Path path)

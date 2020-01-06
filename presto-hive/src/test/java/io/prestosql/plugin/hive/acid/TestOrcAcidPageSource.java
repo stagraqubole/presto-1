@@ -40,11 +40,12 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.OptionalInt;
+import java.util.OptionalLong;
 import java.util.Properties;
 import java.util.Set;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.io.Resources.getResource;
 import static io.airlift.tpch.NationColumn.COMMENT;
 import static io.airlift.tpch.NationColumn.NAME;
 import static io.airlift.tpch.NationColumn.NATION_KEY;
@@ -54,7 +55,7 @@ import static io.prestosql.plugin.hive.HiveStorageFormat.ORC;
 import static io.prestosql.plugin.hive.HiveTestUtils.SESSION;
 import static io.prestosql.plugin.hive.HiveTestUtils.createTestHdfsEnvironment;
 import static io.prestosql.plugin.hive.HiveType.toHiveType;
-import static io.prestosql.spi.type.IntegerType.INTEGER;
+import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
 import static java.util.Collections.nCopies;
 import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.FILE_INPUT_FORMAT;
@@ -64,8 +65,6 @@ import static org.testng.Assert.assertEquals;
 
 public class TestOrcAcidPageSource
 {
-    // This file has the contains the TPC-H nation table which each row repeated 1000 times
-    private static final File TEST_FILE = new File(TestOrcAcidPageSource.class.getClassLoader().getResource("nationFile25kRowsSortedOnNationKey/bucket_00000").getPath());
     private static final HivePageSourceFactory PAGE_SOURCE_FACTORY = new OrcPageSourceFactory(
             new OrcReaderConfig(),
             createTestHdfsEnvironment(),
@@ -74,13 +73,13 @@ public class TestOrcAcidPageSource
     @Test
     public void testFullFileRead()
     {
-        assertRead(ImmutableSet.copyOf(NationColumn.values()), OptionalInt.empty());
+        assertRead(ImmutableSet.copyOf(NationColumn.values()), OptionalLong.empty());
     }
 
     @Test
     public void testSingleColumnRead()
     {
-        assertRead(ImmutableSet.of(REGION_KEY), OptionalInt.empty());
+        assertRead(ImmutableSet.of(REGION_KEY), OptionalLong.empty());
     }
 
     /**
@@ -89,7 +88,7 @@ public class TestOrcAcidPageSource
     @Test
     public void testFullFileSkipped()
     {
-        assertRead(ImmutableSet.copyOf(NationColumn.values()), OptionalInt.of(100));
+        assertRead(ImmutableSet.copyOf(NationColumn.values()), OptionalLong.of(100L));
     }
 
     /**
@@ -98,26 +97,26 @@ public class TestOrcAcidPageSource
     @Test
     public void testSomeStripesAndRowGroupRead()
     {
-        assertRead(ImmutableSet.copyOf(NationColumn.values()), OptionalInt.of(5));
+        assertRead(ImmutableSet.copyOf(NationColumn.values()), OptionalLong.of(5L));
     }
 
-    private static void assertRead(Set<NationColumn> columns, OptionalInt nationKeyPredicate)
+    private static void assertRead(Set<NationColumn> columns, OptionalLong nationKeyPredicate)
     {
         TupleDomain<HiveColumnHandle> tupleDomain = TupleDomain.all();
         if (nationKeyPredicate.isPresent()) {
-            tupleDomain = TupleDomain.withColumnDomains(ImmutableMap.of(toHiveColumnHandle(NATION_KEY), Domain.singleValue(INTEGER, (long) nationKeyPredicate.getAsInt())));
+            tupleDomain = TupleDomain.withColumnDomains(ImmutableMap.of(toHiveColumnHandle(NATION_KEY), Domain.singleValue(BIGINT, nationKeyPredicate.getAsLong())));
         }
 
         List<Nation> actual = readFile(columns, tupleDomain);
 
         List<Nation> expected = new ArrayList<>();
         for (Nation nation : ImmutableList.copyOf(new NationGenerator().iterator())) {
-            if (!nationKeyPredicate.isPresent() || nationKeyPredicate.getAsInt() == nation.getNationKey()) {
+            if (!nationKeyPredicate.isPresent() || nationKeyPredicate.getAsLong() == nation.getNationKey()) {
                 expected.addAll(nCopies(1000, nation));
             }
         }
 
-        assertNations(columns, actual, expected);
+        assertEqualsByColumns(columns, actual, expected);
     }
 
     private static List<Nation> readFile(Set<NationColumn> columns, TupleDomain<HiveColumnHandle> tupleDomain)
@@ -130,13 +129,16 @@ public class TestOrcAcidPageSource
                 .map(HiveColumnHandle::getName)
                 .collect(toImmutableList());
 
+        // This file has the contains the TPC-H nation table which each row repeated 1000 times
+        final File nationFileWithReplicatedRows = new File(getResource("nationFile25kRowsSortedOnNationKey/bucket_00000").getPath());
+
         ConnectorPageSource pageSource = PAGE_SOURCE_FACTORY.createPageSource(
                 new JobConf(new Configuration(false)),
                 SESSION,
-                new Path(TEST_FILE.getAbsoluteFile().toURI()),
+                new Path(nationFileWithReplicatedRows.getAbsoluteFile().toURI()),
                 0,
-                TEST_FILE.length(),
-                TEST_FILE.length(),
+                nationFileWithReplicatedRows.length(),
+                nationFileWithReplicatedRows.length(),
                 createSchema(),
                 columnHandles,
                 tupleDomain,
@@ -156,22 +158,22 @@ public class TestOrcAcidPageSource
 
             page = page.getLoadedPage();
             for (int position = 0; position < page.getPositionCount(); position++) {
-                long nationKey = -1;
+                long nationKey = -42;
                 if (nationKeyColumn >= 0) {
-                    nationKey = INTEGER.getLong(page.getBlock(nationKeyColumn), position);
+                    nationKey = BIGINT.getLong(page.getBlock(nationKeyColumn), position);
                 }
 
-                String name = "INVALID";
+                String name = "<not read>";
                 if (nameColumn >= 0) {
                     name = VARCHAR.getSlice(page.getBlock(nameColumn), position).toStringUtf8();
                 }
 
-                long regionKey = -1;
+                long regionKey = -42;
                 if (regionKeyColumn >= 0) {
-                    regionKey = INTEGER.getLong(page.getBlock(regionKeyColumn), position);
+                    regionKey = BIGINT.getLong(page.getBlock(regionKeyColumn), position);
                 }
 
-                String comment = "INVALID";
+                String comment = "<not read>";
                 if (commentColumn >= 0) {
                     comment = VARCHAR.getSlice(page.getBlock(commentColumn), position).toStringUtf8();
                 }
@@ -188,7 +190,7 @@ public class TestOrcAcidPageSource
         switch (nationColumn.getType().getBase()) {
             case IDENTIFIER:
             case INTEGER:
-                prestoType = INTEGER;
+                prestoType = BIGINT;
                 break;
             case VARCHAR:
                 prestoType = VARCHAR;
@@ -215,16 +217,16 @@ public class TestOrcAcidPageSource
         return schema;
     }
 
-    private static void assertNations(Set<NationColumn> columns, List<Nation> actualRows, List<Nation> expectedRows)
+    private static void assertEqualsByColumns(Set<NationColumn> columns, List<Nation> actualRows, List<Nation> expectedRows)
     {
         assertEquals(actualRows.size(), expectedRows.size(), "row count");
         for (int i = 0; i < actualRows.size(); i++) {
             Nation actual = actualRows.get(i);
             Nation expected = expectedRows.get(i);
             assertEquals(actual.getNationKey(), columns.contains(NATION_KEY) ? expected.getNationKey() : -1);
-            assertEquals(actual.getName(), columns.contains(NAME) ? expected.getName() : "INVALID");
+            assertEquals(actual.getName(), columns.contains(NAME) ? expected.getName() : "<not read>");
             assertEquals(actual.getRegionKey(), columns.contains(REGION_KEY) ? expected.getRegionKey() : -1);
-            assertEquals(actual.getComment(), columns.contains(COMMENT) ? expected.getComment() : "INVALID");
+            assertEquals(actual.getComment(), columns.contains(COMMENT) ? expected.getComment() : "<not read>");
         }
     }
 }
