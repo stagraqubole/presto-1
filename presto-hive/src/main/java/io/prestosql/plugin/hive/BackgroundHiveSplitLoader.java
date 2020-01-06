@@ -419,23 +419,7 @@ public class BackgroundHiveSplitLoader
             throw new PrestoException(NOT_SUPPORTED, "Original non-ACID files in transactional tables are not supported");
         }
 
-        fileIterators.addLast(
-                directory.getOriginalFiles().stream()
-                        .map(file -> file.getFileStatus())
-                        .map(fileStatus -> {
-                            try {
-                                return splitFactory.createInternalHiveSplit(fileStatus,
-                                        hdfsEnvironment.doAs(hdfsContext.getIdentity().getUser(), () -> fs.getFileBlockLocations(fileStatus.getPath(), 0, fileStatus.getLen())));
-                            }
-                            catch (IOException e) {
-                                throw new PrestoException(HIVE_BAD_DATA, "Could not fetch BlockLocations for original file " + fileStatus.getPath(), e);
-                            }
-                        })
-                        .filter(Optional::isPresent)
-                        .map(Optional::get)
-                        .iterator());
-
-        // First create Delete Deltas registry
+        // Create a registry of delete_delta directories for the partition
         DeleteDeltaLocations.Builder deleteDeltaLocationsBuilder = DeleteDeltaLocations.builder(path);
         for (AcidUtils.ParsedDelta delta : directory.getCurrentDirectories()) {
             if (delta.isDeleteDelta()) {

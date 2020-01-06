@@ -17,6 +17,7 @@ import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.io.MoreFiles;
 import io.airlift.stats.CounterStat;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
@@ -65,6 +66,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.slice.Slices.utf8Slice;
@@ -95,7 +97,6 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertThrows;
 import static org.testng.Assert.assertTrue;
-import static org.testng.Assert.fail;
 
 public class TestBackgroundHiveSplitLoader
 {
@@ -436,7 +437,7 @@ public class TestBackgroundHiveSplitLoader
     public void testFullAcidTableWithOriginalFilesFails()
             throws Exception
     {
-        java.nio.file.Path tablePath = Files.createTempDirectory(UUID.randomUUID().toString());
+        java.nio.file.Path tablePath = Files.createTempDirectory("TestBackgroundHiveSplitLoader");
         Table table = table(
                 tablePath.toString(),
                 ImmutableList.of(),
@@ -450,33 +451,37 @@ public class TestBackgroundHiveSplitLoader
         try {
             for (String path : filePaths) {
                 File file = new File(path);
-                file.getParentFile().mkdirs();
-                file.createNewFile();
+                if (!file.getParent().equals(tablePath.toString())) {
+                    assertTrue(file.getParentFile().mkdirs(), "Failed creating directory " + file.getParentFile());
+                }
                 Files.write(file.toPath(), "test".getBytes(UTF_8));
             }
 
             // ValidWriteIdsList is of format <currentTxn>$<schema>.<table>:<highWatermark>:<minOpenWriteId>::<AbortedTxns>
             // This writeId list has high watermark transaction=3
-            String validWriteIdsList = format("4$%s.%s:3:9223372036854775807::", table.getDatabaseName(), table.getTableName());
+            ValidReaderWriteIdList validWriteIdsList = new ValidReaderWriteIdList(format("4$%s.%s:3:9223372036854775807::", table.getDatabaseName(), table.getTableName()));
 
             BackgroundHiveSplitLoader backgroundHiveSplitLoader = backgroundHiveSplitLoader(
                     createTestHdfsEnvironment(),
-                    TupleDomain.none(),
+                    TupleDomain.all(),
                     Optional.empty(),
                     table,
                     Optional.empty(),
-                    Optional.of(new ValidReaderWriteIdList(validWriteIdsList)));
+                    Optional.of(validWriteIdsList));
 
             HiveSplitSource hiveSplitSource = hiveSplitSource(backgroundHiveSplitLoader);
             backgroundHiveSplitLoader.start(hiveSplitSource);
             drain(hiveSplitSource);
-            fail("Split loading should have failed due to original files");
+            assertThatThrownBy(() -> drain(hiveSplitSource))
+                    .isInstanceOfSatisfying(PrestoException.class, e -> {
+                        assertEquals(NOT_SUPPORTED.toErrorCode(), e.getErrorCode());
+                    });
         }
         catch (PrestoException e) {
             assertEquals(NOT_SUPPORTED.toErrorCode(), e.getErrorCode(), "Unexpected exception " + e);
         }
         finally {
-            Files.walk(tablePath).sorted(Comparator.reverseOrder()).map(java.nio.file.Path::toFile).forEach(File::delete);
+            MoreFiles.deleteRecursively(tablePath, ALLOW_INSECURE);
         }
     }
 

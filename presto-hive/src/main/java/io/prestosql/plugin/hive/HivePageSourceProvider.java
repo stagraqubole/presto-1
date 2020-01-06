@@ -229,7 +229,7 @@ public class HivePageSourceProvider
             if (cursor.isPresent()) {
                 RecordCursor delegate = cursor.get();
 
-                checkArgument(!deleteDeltaLocations.isPresent(), "Delta delete is not supported");
+                checkArgument(!deleteDeltaLocations.isPresent(), "Delete delta is not supported");
 
                 if (bucketAdaptation.isPresent()) {
                     delegate = new HiveBucketAdapterRecordCursor(

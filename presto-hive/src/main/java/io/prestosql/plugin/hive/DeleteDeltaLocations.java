@@ -24,7 +24,6 @@ import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
-import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -164,25 +163,26 @@ public class DeleteDeltaLocations
 
     public static class Builder
     {
-        private final String partitionLocation;
-        private final ImmutableList.Builder<DeleteDeltaInfo> deleteDeltaInfoBuilder;
+        private final Path partitionLocation;
+        private final ImmutableList.Builder<DeleteDeltaInfo> deleteDeltaInfoBuilder = ImmutableList.builder();
 
         private Builder(Path partitionPath)
         {
-            requireNonNull(partitionPath, "partitionPath is null");
-            partitionLocation = partitionPath.toString();
-            deleteDeltaInfoBuilder = ImmutableList.builder();
+            partitionLocation = requireNonNull(partitionPath, "partitionPath is null");
         }
 
-        public void addDeleteDelta(Path deleteDeltaPath, long minWriteId, long maxWriteId, int statementId)
+        public Builder addDeleteDelta(Path deleteDeltaPath, long minWriteId, long maxWriteId, int statementId)
         {
             requireNonNull(deleteDeltaPath, "deleteDeltaPath is null");
-            String partitionPathFromDeleteDelta = deleteDeltaPath.getParent().toString();
+            Path partitionPathFromDeleteDelta = deleteDeltaPath.getParent();
             checkArgument(
                     partitionLocation.equals(partitionPathFromDeleteDelta),
-                    format("Partition location in DeleteDelta, %s, does not match stored location %s", deleteDeltaPath.getParent().toString(), partitionLocation));
+                    "Partition location in DeleteDelta '%s' does not match stored location '%s'",
+                    deleteDeltaPath.getParent().toString(),
+                    partitionLocation);
 
             deleteDeltaInfoBuilder.add(new DeleteDeltaInfo(minWriteId, maxWriteId, statementId));
+            return this;
         }
 
         public Optional<DeleteDeltaLocations> build()
@@ -191,7 +191,7 @@ public class DeleteDeltaLocations
             if (deleteDeltas.isEmpty()) {
                 return Optional.empty();
             }
-            return Optional.of(new DeleteDeltaLocations(partitionLocation, deleteDeltas));
+            return Optional.of(new DeleteDeltaLocations(partitionLocation.toString(), deleteDeltas));
         }
     }
 }

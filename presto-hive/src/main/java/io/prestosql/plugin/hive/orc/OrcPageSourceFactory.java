@@ -137,7 +137,7 @@ public class OrcPageSourceFactory
             return Optional.empty();
         }
 
-        checkArgument(!deleteDeltaLocations.isPresent(), "Delta delete is not supported");
+        checkArgument(!deleteDeltaLocations.isPresent(), "Delete delta is not supported");
 
         // per HIVE-13040 and ORC-162, empty files are allowed
         if (fileSize == 0) {

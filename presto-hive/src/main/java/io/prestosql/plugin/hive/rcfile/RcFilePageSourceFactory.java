@@ -118,7 +118,7 @@ public class RcFilePageSourceFactory
             return Optional.empty();
         }
 
-        checkArgument(!deleteDeltaLocations.isPresent(), "Delta delete is not supported");
+        checkArgument(!deleteDeltaLocations.isPresent(), "Delete delta is not supported");
 
         if (fileSize == 0) {
             throw new PrestoException(HIVE_BAD_DATA, "RCFile is empty: " + path);

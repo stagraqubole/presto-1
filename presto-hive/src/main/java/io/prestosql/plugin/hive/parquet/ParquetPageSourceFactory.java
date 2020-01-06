@@ -128,7 +128,7 @@ public class ParquetPageSourceFactory
             return Optional.empty();
         }
 
-        checkArgument(!deleteDeltaLocations.isPresent(), "Delta delete is not supported");
+        checkArgument(!deleteDeltaLocations.isPresent(), "Delete delta is not supported");
 
         return Optional.of(createParquetPageSource(
                 hdfsEnvironment,
