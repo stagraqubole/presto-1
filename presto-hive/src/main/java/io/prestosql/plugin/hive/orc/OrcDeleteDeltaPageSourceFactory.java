@@ -21,7 +21,7 @@ import org.apache.hadoop.fs.Path;
 
 import static java.util.Objects.requireNonNull;
 
-public class OrcDeletedDeltaPageSourceFactory
+public class OrcDeleteDeltaPageSourceFactory
 {
     private final OrcReaderOptions options;
     private final String sessionUser;
@@ -29,7 +29,7 @@ public class OrcDeletedDeltaPageSourceFactory
     private final HdfsEnvironment hdfsEnvironment;
     private final FileFormatDataSourceStats stats;
 
-    public OrcDeletedDeltaPageSourceFactory(
+    public OrcDeleteDeltaPageSourceFactory(
             OrcReaderOptions options,
             String sessionUser,
             Configuration configuration,
@@ -43,9 +43,9 @@ public class OrcDeletedDeltaPageSourceFactory
         this.stats = requireNonNull(stats, "stats is null");
     }
 
-    public OrcDeletedDeltaPageSource createPageSource(Path path, long fileSize)
+    public OrcDeleteDeltaPageSource createPageSource(Path path, long fileSize)
     {
-        return new OrcDeletedDeltaPageSource(
+        return new OrcDeleteDeltaPageSource(
                 path,
                 fileSize,
                 options,

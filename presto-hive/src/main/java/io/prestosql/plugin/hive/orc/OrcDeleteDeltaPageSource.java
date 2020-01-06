@@ -16,7 +16,6 @@ package io.prestosql.plugin.hive.orc;
 import com.google.common.collect.ImmutableList;
 import io.prestosql.memory.context.AggregatedMemoryContext;
 import io.prestosql.orc.OrcColumn;
-import io.prestosql.orc.OrcCorruptionException;
 import io.prestosql.orc.OrcDataSource;
 import io.prestosql.orc.OrcDataSourceId;
 import io.prestosql.orc.OrcPredicate;
@@ -38,23 +37,28 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.List;
+import java.util.Map;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Strings.nullToEmpty;
+import static com.google.common.collect.Maps.uniqueIndex;
 import static io.prestosql.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static io.prestosql.orc.OrcReader.MAX_BATCH_SIZE;
-import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_BAD_DATA;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_CANNOT_OPEN_SPLIT;
-import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_CURSOR_ERROR;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_MISSING_DATA;
+import static io.prestosql.plugin.hive.orc.OrcPageSource.handleException;
+import static io.prestosql.plugin.hive.orc.OrcPageSourceFactory.ACID_COLUMN_BUCKET;
+import static io.prestosql.plugin.hive.orc.OrcPageSourceFactory.ACID_COLUMN_ORIGINAL_TRANSACTION;
+import static io.prestosql.plugin.hive.orc.OrcPageSourceFactory.ACID_COLUMN_ROW_ID;
 import static io.prestosql.plugin.hive.orc.OrcPageSourceFactory.verifyAcidSchema;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.IntegerType.INTEGER;
 import static java.lang.String.format;
+import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
 import static org.joda.time.DateTimeZone.UTC;
 
-public class OrcDeletedDeltaPageSource
+public class OrcDeleteDeltaPageSource
         implements ConnectorPageSource
 {
     private final OrcRecordReader recordReader;
@@ -64,7 +68,7 @@ public class OrcDeletedDeltaPageSource
 
     private boolean closed;
 
-    public OrcDeletedDeltaPageSource(
+    public OrcDeleteDeltaPageSource(
             Path path,
             long fileSize,
             OrcReaderOptions options,
@@ -97,8 +101,10 @@ public class OrcDeletedDeltaPageSource
             OrcReader reader = new OrcReader(orcDataSource, options);
 
             verifyAcidSchema(reader, path);
-            List<OrcColumn> acidColumns = reader.getRootColumn().getNestedColumns();
-            List<OrcColumn> rowIdColumns = ImmutableList.of(acidColumns.get(1), acidColumns.get(2), acidColumns.get(3));
+            Map<String, OrcColumn> acidColumns = uniqueIndex(
+                    reader.getRootColumn().getNestedColumns(),
+                    orcColumn -> orcColumn.getColumnName().toLowerCase(ENGLISH));
+            List<OrcColumn> rowIdColumns = ImmutableList.of(acidColumns.get(ACID_COLUMN_ORIGINAL_TRANSACTION), acidColumns.get(ACID_COLUMN_BUCKET), acidColumns.get(ACID_COLUMN_ROW_ID));
 
             recordReader = reader.createRecordReader(
                     rowIdColumns,
@@ -109,13 +115,14 @@ public class OrcDeletedDeltaPageSource
                     UTC,
                     systemMemoryContext,
                     MAX_BATCH_SIZE,
-                    exception -> OrcPageSource.handleException(orcDataSource.getId(), exception));
+                    exception -> handleException(orcDataSource.getId(), exception));
         }
         catch (Exception e) {
             try {
                 orcDataSource.close();
             }
-            catch (IOException ignored) {
+            catch (IOException ex) {
+                e.addSuppressed(ex);
             }
             if (e instanceof PrestoException) {
                 throw (PrestoException) e;
@@ -160,17 +167,6 @@ public class OrcDeletedDeltaPageSource
             closeWithSuppression(e);
             throw handleException(orcDataSource.getId(), e);
         }
-    }
-
-    private static PrestoException handleException(OrcDataSourceId dataSourceId, Exception exception)
-    {
-        if (exception instanceof PrestoException) {
-            return (PrestoException) exception;
-        }
-        if (exception instanceof OrcCorruptionException) {
-            return new PrestoException(HIVE_BAD_DATA, exception);
-        }
-        return new PrestoException(HIVE_CURSOR_ERROR, format("Failed to read ORC file: %s", dataSourceId), exception);
     }
 
     @Override

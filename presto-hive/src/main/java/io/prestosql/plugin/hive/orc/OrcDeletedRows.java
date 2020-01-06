@@ -26,8 +26,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.openjdk.jol.info.ClassLayout;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.FileNotFoundException;
@@ -35,9 +35,9 @@ import java.io.IOException;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.function.Function;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
+import static com.google.common.base.Verify.verify;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_BAD_DATA;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_CURSOR_ERROR;
 import static io.prestosql.spi.type.BigintType.BIGINT;
@@ -50,7 +50,7 @@ public class OrcDeletedRows
 {
     private final String sourceFileName;
     private final DeleteDeltaLocations deleteDeltaLocations;
-    private final OrcDeletedDeltaPageSourceFactory pageSourceFactory;
+    private final OrcDeleteDeltaPageSourceFactory pageSourceFactory;
     private final String sessionUser;
     private final Configuration configuration;
     private final HdfsEnvironment hdfsEnvironment;
@@ -60,7 +60,7 @@ public class OrcDeletedRows
     public OrcDeletedRows(
             String sourceFileName,
             Optional<DeleteDeltaLocations> deleteDeltaLocations,
-            OrcDeletedDeltaPageSourceFactory pageSourceFactory,
+            OrcDeleteDeltaPageSourceFactory pageSourceFactory,
             String sessionUser,
             Configuration configuration,
             HdfsEnvironment hdfsEnvironment)
@@ -79,38 +79,40 @@ public class OrcDeletedRows
         }
     }
 
-    public MaskDeletedRowsFunction getMaskDeletedRowsFunction(Page pageRowIds)
+    public MaskDeletedRowsFunction getMaskDeletedRowsFunction(Page sourcePage)
     {
-        return new MaskDeletedRowsFunction(pageRowIds);
+        return new MaskDeletedRowsFunction(sourcePage);
     }
 
     @NotThreadSafe
     public class MaskDeletedRowsFunction
-            implements Function<Block, Block>
     {
-        private Page pageRowIds;
+        @Nullable
+        private Page sourcePage;
         private int positionCount;
+        @Nullable
         private int[] validPositions;
 
-        public MaskDeletedRowsFunction(Page pageRowIds)
+        public MaskDeletedRowsFunction(Page sourcePage)
         {
-            this.pageRowIds = pageRowIds;
+            this.sourcePage = sourcePage;
         }
 
         public int getPositionCount()
         {
-            if (pageRowIds != null) {
+            if (sourcePage != null) {
                 loadValidPositions();
+                verify(sourcePage == null);
             }
 
             return positionCount;
         }
 
-        @Override
         public Block apply(Block block)
         {
-            if (pageRowIds != null) {
+            if (sourcePage != null) {
                 loadValidPositions();
+                verify(sourcePage == null);
             }
 
             if (positionCount == block.getPositionCount()) {
@@ -123,21 +125,22 @@ public class OrcDeletedRows
         {
             Set<RowId> deletedRows = getDeletedRows();
             if (deletedRows.isEmpty()) {
-                this.positionCount = pageRowIds.getPositionCount();
-                this.pageRowIds = null;
+                this.positionCount = sourcePage.getPositionCount();
+                this.sourcePage = null;
                 return;
             }
 
-            int[] validPositions = new int[pageRowIds.getPositionCount()];
+            int[] validPositions = new int[sourcePage.getPositionCount()];
             int validPositionsIndex = 0;
-            for (int position = 0; position < pageRowIds.getPositionCount(); position++) {
-                if (!deletedRows.contains(new RowId(pageRowIds, position))) {
-                    validPositions[validPositionsIndex++] = position;
+            for (int position = 0; position < sourcePage.getPositionCount(); position++) {
+                if (!deletedRows.contains(new RowId(sourcePage, position))) {
+                    validPositions[validPositionsIndex] = position;
+                    validPositionsIndex++;
                 }
             }
             this.positionCount = validPositionsIndex;
             this.validPositions = validPositions;
-            this.pageRowIds = null;
+            this.sourcePage = null;
         }
     }
 
@@ -152,7 +155,7 @@ public class OrcDeletedRows
             Path path = createPath(deleteDeltaLocations.getPartitionLocation(), deleteDeltaInfo, sourceFileName);
             try {
                 FileSystem fileSystem = hdfsEnvironment.getFileSystem(sessionUser, path, configuration);
-                FileStatus fileStatus = fileSystem.getFileStatus(path);
+                FileStatus fileStatus = hdfsEnvironment.doAs(sessionUser, () -> fileSystem.getFileStatus(path));
 
                 ConnectorPageSource pageSource = pageSourceFactory.createPageSource(fileStatus.getPath(), fileStatus.getLen());
                 while (!pageSource.isFinished()) {
@@ -172,7 +175,7 @@ public class OrcDeletedRows
                 throw e;
             }
             catch (OrcCorruptionException e) {
-                throw new PrestoException(HIVE_BAD_DATA, e);
+                throw new PrestoException(HIVE_BAD_DATA, format("Failed to read ORC file: %s", path), e);
             }
             catch (RuntimeException | IOException e) {
                 throw new PrestoException(HIVE_CURSOR_ERROR, format("Failed to read ORC file: %s", path), e);
@@ -193,9 +196,9 @@ public class OrcDeletedRows
 
     private static class RowId
     {
-        private static final int INSTANCE_SIZE = ClassLayout.parseClass(RowId.class).instanceSize() +
-                ClassLayout.parseClass(Byte.class).instanceSize() * 2 +
-                ClassLayout.parseClass(Integer.class).instanceSize();
+        private static final int ORIGINAL_TRANSACTION_INDEX = 0;
+        private static final int BUCKET_ID_INDEX = 1;
+        private static final int ROW_ID_INDEX = 2;
 
         private final long originalTransaction;
         private final int bucket;
@@ -203,16 +206,9 @@ public class OrcDeletedRows
 
         private RowId(Page page, int position)
         {
-            this(BIGINT.getLong(page.getBlock(0), position),
-                    (int) INTEGER.getLong(page.getBlock(1), position),
-                    BIGINT.getLong(page.getBlock(2), position));
-        }
-
-        public RowId(long originalTransaction, int bucket, long rowId)
-        {
-            this.originalTransaction = originalTransaction;
-            this.bucket = bucket;
-            this.rowId = rowId;
+            this.originalTransaction = BIGINT.getLong(page.getBlock(ORIGINAL_TRANSACTION_INDEX), position);
+            this.bucket = (int) INTEGER.getLong(page.getBlock(BUCKET_ID_INDEX), position);
+            this.rowId = BIGINT.getLong(page.getBlock(ROW_ID_INDEX), position);
         }
 
         @Override
@@ -226,10 +222,10 @@ public class OrcDeletedRows
                 return false;
             }
 
-            RowId rowId1 = (RowId) o;
-            return originalTransaction == rowId1.originalTransaction &&
-                    bucket == rowId1.bucket &&
-                    rowId == rowId1.rowId;
+            RowId other = (RowId) o;
+            return originalTransaction == other.originalTransaction &&
+                    bucket == other.bucket &&
+                    rowId == other.rowId;
         }
 
         @Override

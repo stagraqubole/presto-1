@@ -33,7 +33,6 @@ import io.prestosql.spi.type.Type;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.List;
-import java.util.function.Function;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
@@ -113,7 +112,7 @@ public class OrcPageSource
         for (int i = 0; i < columnAdaptations.size(); i++) {
             blocks[i] = columnAdaptations.get(i).block(page, maskDeletedRowsFunction);
         }
-        return new Page(page.getPositionCount(), blocks);
+        return new Page(maskDeletedRowsFunction.getPositionCount(), blocks);
     }
 
     static PrestoException handleException(OrcDataSourceId dataSourceId, Exception exception)
@@ -247,13 +246,13 @@ public class OrcPageSource
         private static final class MaskingBlockLoader
                 implements LazyBlockLoader
         {
-            private Function<Block, Block> maskDeletedRowsFunction;
+            private MaskDeletedRowsFunction maskDeletedRowsFunction;
             private Block sourceBlock;
 
-            public MaskingBlockLoader(Function<Block, Block> maskDeletedRowsFunction, Block sourceBlock)
+            public MaskingBlockLoader(MaskDeletedRowsFunction maskDeletedRowsFunction, Block sourceBlock)
             {
-                this.maskDeletedRowsFunction = maskDeletedRowsFunction;
-                this.sourceBlock = sourceBlock;
+                this.maskDeletedRowsFunction = requireNonNull(maskDeletedRowsFunction, "maskDeletedRowsFunction is null");
+                this.sourceBlock = requireNonNull(sourceBlock, "sourceBlock is null");
             }
 
             @Override
@@ -261,7 +260,7 @@ public class OrcPageSource
             {
                 checkState(maskDeletedRowsFunction != null, "Already loaded");
 
-                Block resultBlock = maskDeletedRowsFunction.apply(sourceBlock);
+                Block resultBlock = maskDeletedRowsFunction.apply(sourceBlock.getLoadedBlock());
 
                 maskDeletedRowsFunction = null;
                 sourceBlock = null;

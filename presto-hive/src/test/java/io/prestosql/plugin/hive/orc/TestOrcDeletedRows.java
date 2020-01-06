@@ -25,6 +25,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.io.AcidUtils;
 import org.apache.hadoop.mapred.JobConf;
+import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 import java.util.Optional;
@@ -39,16 +40,24 @@ import static org.testng.Assert.assertEquals;
 
 public class TestOrcDeletedRows
 {
-    private static final Path PARTITION_DIR = new Path(TestOrcDeletedRows.class.getClassLoader().getResource("fullacid_delete_delta_test") + "/");
-    private static final Block BUCKET_BLOCK = INTEGER.createFixedSizeBlockBuilder(1)
+    private Path partitionDirectory;
+    private Block bucketBlock;
+    private Block rowIdBlock;
+
+    @BeforeClass
+    public void setUp()
+    {
+        partitionDirectory = new Path(TestOrcDeletedRows.class.getClassLoader().getResource("fullacid_delete_delta_test") + "/");
+        bucketBlock = INTEGER.createFixedSizeBlockBuilder(1)
             .writeInt(536870912)
             .build();
-    private static final Block ROW_ID_BLOCK = BIGINT.createFixedSizeBlockBuilder(1)
+        rowIdBlock = BIGINT.createFixedSizeBlockBuilder(1)
             .writeLong(0)
             .build();
+    }
 
     @Test
-    public void testEmptyDeletedLocations()
+    public void testEmptyDeleteLocations()
     {
         OrcDeletedRows deletedRows = createOrcDeletedRows(Optional.empty());
 
@@ -58,9 +67,9 @@ public class TestOrcDeletedRows
     }
 
     @Test
-    public void testDeletedLocations()
+    public void testDeleteLocations()
     {
-        DeleteDeltaLocations.Builder deleteDeltaLocationsBuilder = DeleteDeltaLocations.builder(PARTITION_DIR);
+        DeleteDeltaLocations.Builder deleteDeltaLocationsBuilder = DeleteDeltaLocations.builder(partitionDirectory);
         addDeleteDelta(deleteDeltaLocationsBuilder, 4L, 4L, 0);
         addDeleteDelta(deleteDeltaLocationsBuilder, 7L, 7L, 0);
 
@@ -83,16 +92,16 @@ public class TestOrcDeletedRows
         assertEquals(block.getPositionCount(), 10);
     }
 
-    private static void addDeleteDelta(DeleteDeltaLocations.Builder deleteDeltaLocationsBuilder, long minWriteId, long maxWriteId, int statementId)
+    private void addDeleteDelta(DeleteDeltaLocations.Builder deleteDeltaLocationsBuilder, long minWriteId, long maxWriteId, int statementId)
     {
-        Path deleteDeltaPath = new Path(PARTITION_DIR, AcidUtils.deleteDeltaSubdir(minWriteId, maxWriteId, statementId));
+        Path deleteDeltaPath = new Path(partitionDirectory, AcidUtils.deleteDeltaSubdir(minWriteId, maxWriteId, statementId));
         deleteDeltaLocationsBuilder.addDeleteDelta(deleteDeltaPath, minWriteId, maxWriteId, statementId);
     }
 
-    private static OrcDeletedRows createOrcDeletedRows(Optional<DeleteDeltaLocations> deleteDeltaLocations)
+    private OrcDeletedRows createOrcDeletedRows(Optional<DeleteDeltaLocations> deleteDeltaLocations)
     {
         JobConf configuration = new JobConf(new Configuration(false));
-        OrcDeletedDeltaPageSourceFactory pageSourceFactory = new OrcDeletedDeltaPageSourceFactory(
+        OrcDeleteDeltaPageSourceFactory pageSourceFactory = new OrcDeleteDeltaPageSourceFactory(
                 new OrcReaderOptions(),
                 "test",
                 configuration,
@@ -108,7 +117,7 @@ public class TestOrcDeletedRows
                 HDFS_ENVIRONMENT);
     }
 
-    private static Page createTestPage(int originalTransactionStart, int originalTransactionEnd)
+    private Page createTestPage(int originalTransactionStart, int originalTransactionEnd)
     {
         int size = originalTransactionEnd - originalTransactionStart;
         BlockBuilder originalTransaction = BIGINT.createFixedSizeBlockBuilder(size);
@@ -119,7 +128,7 @@ public class TestOrcDeletedRows
         return new Page(
                 size,
                 originalTransaction.build(),
-                new RunLengthEncodedBlock(BUCKET_BLOCK, size),
-                new RunLengthEncodedBlock(ROW_ID_BLOCK, size));
+                new RunLengthEncodedBlock(bucketBlock, size),
+                new RunLengthEncodedBlock(rowIdBlock, size));
     }
 }

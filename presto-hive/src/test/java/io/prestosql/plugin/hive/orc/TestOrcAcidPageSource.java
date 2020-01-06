@@ -42,7 +42,7 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Properties;
 import java.util.Set;
-import java.util.function.IntPredicate;
+import java.util.function.LongPredicate;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.tpch.NationColumn.COMMENT;
@@ -104,15 +104,15 @@ public class TestOrcAcidPageSource
     public void testDeletedRows()
     {
         Path partitionLocation = new Path(getClass().getClassLoader().getResource("nation_delete_deltas") + "/");
-        Optional<DeleteDeltaLocations> deltaDeltaLocations = DeleteDeltaLocations.builder(partitionLocation)
+        Optional<DeleteDeltaLocations> deleteDeltaLocations = DeleteDeltaLocations.builder(partitionLocation)
                 .addDeleteDelta(new Path(partitionLocation, deleteDeltaSubdir(3L, 3L, 0)), 3L, 3L, 0)
                 .addDeleteDelta(new Path(partitionLocation, deleteDeltaSubdir(4L, 4L, 0)), 4L, 4L, 0)
                 .build();
 
-        assertRead(ImmutableSet.copyOf(NationColumn.values()), OptionalLong.empty(), deltaDeltaLocations, nationKey -> nationKey == 5 || nationKey == 19);
+        assertRead(ImmutableSet.copyOf(NationColumn.values()), OptionalLong.empty(), deleteDeltaLocations, nationKey -> nationKey == 5 || nationKey == 19);
     }
 
-    private static void assertRead(Set<NationColumn> columns, OptionalLong nationKeyPredicate, Optional<DeleteDeltaLocations> deleteDeltaLocations, IntPredicate deletedRows)
+    private static void assertRead(Set<NationColumn> columns, OptionalLong nationKeyPredicate, Optional<DeleteDeltaLocations> deleteDeltaLocations, LongPredicate deletedRows)
     {
         TupleDomain<HiveColumnHandle> tupleDomain = TupleDomain.all();
         if (nationKeyPredicate.isPresent()) {
@@ -126,7 +126,7 @@ public class TestOrcAcidPageSource
             if (nationKeyPredicate.isPresent() && nationKeyPredicate.getAsLong() != nation.getNationKey()) {
                 continue;
             }
-            if (deletedRows.test((int) nation.getNationKey())) {
+            if (deletedRows.test(nation.getNationKey())) {
                 continue;
             }
             expected.addAll(nCopies(1000, nation));
