@@ -31,21 +31,21 @@ import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.IntegerType.INTEGER;
 import static org.testng.Assert.assertEquals;
 
-public class TestOrcDeletedRowsPageSource
+public class TestOrcDeleteDeltaPageSource
 {
-    private static final File DELETE_FILE = new File(TestOrcDeletedRowsPageSource.class.getClassLoader().getResource("fullacid_delete_delta_test/delete_delta_0000004_0000004_0000/bucket_00000").getPath());
+    private static final File DELETE_FILE = new File(TestOrcDeleteDeltaPageSource.class.getClassLoader().getResource("fullacid_delete_delta_test/delete_delta_0000004_0000004_0000/bucket_00000").getPath());
 
     @Test
     public void testReadingDeletedRows()
     {
-        OrcDeletedDeltaPageSourceFactory pageSourceFactory = new OrcDeletedDeltaPageSourceFactory(
+        OrcDeleteDeltaPageSourceFactory pageSourceFactory = new OrcDeleteDeltaPageSourceFactory(
                 new OrcReaderOptions(),
                 "test",
                 new JobConf(new Configuration(false)),
                 HDFS_ENVIRONMENT,
                 new FileFormatDataSourceStats());
 
-        OrcDeletedDeltaPageSource pageSource = pageSourceFactory.createPageSource(new Path(DELETE_FILE.toURI()), DELETE_FILE.length());
+        OrcDeleteDeltaPageSource pageSource = pageSourceFactory.createPageSource(new Path(DELETE_FILE.toURI()), DELETE_FILE.length());
         MaterializedResult materializedRows = MaterializedResult.materializeSourceDataStream(SESSION, pageSource, ImmutableList.of(BIGINT, INTEGER, BIGINT));
 
         assertEquals(materializedRows.getRowCount(), 1);

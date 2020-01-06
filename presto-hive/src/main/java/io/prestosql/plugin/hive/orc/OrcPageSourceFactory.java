@@ -93,11 +93,11 @@ public class OrcPageSourceFactory
         implements HivePageSourceFactory
 {
     // ACID format column names
-    public static String ACID_COLUMN_OPERATION = "operation";
-    public static String ACID_COLUMN_ORIGINAL_TRANSACTION = "originalTransaction";
-    public static String ACID_COLUMN_BUCKET = "bucket";
-    public static String ACID_COLUMN_ROW_ID = "rowId";
-    public static String ACID_COLUMN_CURRENT_TRANSACTION = "currentTransaction";
+    public static final String ACID_COLUMN_OPERATION = "operation";
+    public static final String ACID_COLUMN_ORIGINAL_TRANSACTION = "originaltransaction";
+    public static final String ACID_COLUMN_BUCKET = "bucket";
+    public static final String ACID_COLUMN_ROW_ID = "rowid";
+    public static final String ACID_COLUMN_CURRENT_TRANSACTION = "currenttransaction";
     public static final String ACID_COLUMN_ROW_STRUCT = "row";
 
     private static final Pattern DEFAULT_HIVE_COLUMN_NAME_PATTERN = Pattern.compile("_col\\d+");
@@ -216,9 +216,19 @@ public class OrcPageSourceFactory
             OrcReader reader = new OrcReader(orcDataSource, options);
 
             List<OrcColumn> fileColumns = reader.getRootColumn().getNestedColumns();
+            List<OrcColumn> fileReadColumns = isFullAcid ? new ArrayList<>(columns.size() + 3) : new ArrayList<>(columns.size());
+            List<Type> fileReadTypes = isFullAcid ? new ArrayList<>(columns.size() + 3) : new ArrayList<>(columns.size());
             if (isFullAcid) {
                 verifyAcidSchema(reader, path);
-                fileColumns = uniqueIndex(fileColumns, orcColumn -> orcColumn.getColumnName().toLowerCase(ENGLISH)).get(ACID_COLUMN_ROW_STRUCT).getNestedColumns();
+                Map<String, OrcColumn> acidColumnsByName = uniqueIndex(fileColumns, orcColumn -> orcColumn.getColumnName().toLowerCase(ENGLISH));
+                fileColumns = acidColumnsByName.get(ACID_COLUMN_ROW_STRUCT).getNestedColumns();
+
+                fileReadColumns.add(acidColumnsByName.get(ACID_COLUMN_ORIGINAL_TRANSACTION));
+                fileReadTypes.add(BIGINT);
+                fileReadColumns.add(acidColumnsByName.get(ACID_COLUMN_BUCKET));
+                fileReadTypes.add(INTEGER);
+                fileReadColumns.add(acidColumnsByName.get(ACID_COLUMN_ROW_ID));
+                fileReadTypes.add(BIGINT);
             }
 
             Map<String, OrcColumn> fileColumnsByName = ImmutableMap.of();
@@ -233,17 +243,6 @@ public class OrcPageSourceFactory
                     .setBloomFiltersEnabled(options.isBloomFiltersEnabled());
             Map<HiveColumnHandle, Domain> effectivePredicateDomains = effectivePredicate.getDomains()
                     .orElseThrow(() -> new IllegalArgumentException("Effective predicate is none"));
-            List<OrcColumn> fileReadColumns = new ArrayList<>(columns.size());
-            List<Type> fileReadTypes = new ArrayList<>(columns.size());
-            if (isFullAcid) {
-                List<OrcColumn> acidColumns = reader.getRootColumn().getNestedColumns();
-                fileReadColumns.add(acidColumns.get(1));
-                fileReadTypes.add(BIGINT);
-                fileReadColumns.add(acidColumns.get(2));
-                fileReadTypes.add(INTEGER);
-                fileReadColumns.add(acidColumns.get(3));
-                fileReadTypes.add(BIGINT);
-            }
             List<ColumnAdaptation> columnAdaptations = new ArrayList<>(columns.size());
             for (HiveColumnHandle column : columns) {
                 OrcColumn orcColumn = null;
@@ -285,7 +284,7 @@ public class OrcPageSourceFactory
             OrcDeletedRows deletedRows = new OrcDeletedRows(
                     path.getName(),
                     deleteDeltaLocations,
-                    new OrcDeletedDeltaPageSourceFactory(options, sessionUser, configuration, hdfsEnvironment, stats),
+                    new OrcDeleteDeltaPageSourceFactory(options, sessionUser, configuration, hdfsEnvironment, stats),
                     sessionUser,
                     configuration,
                     hdfsEnvironment);
@@ -346,7 +345,7 @@ public class OrcPageSourceFactory
     private static void verifyAcidColumn(OrcReader orcReader, int columnIndex, String columnName, OrcTypeKind columnType, Path path)
     {
         OrcColumn column = orcReader.getRootColumn().getNestedColumns().get(columnIndex);
-        if (!column.getColumnName().equals(columnName)) {
+        if (!column.getColumnName().toLowerCase(ENGLISH).equals(columnName)) {
             throw new PrestoException(
                     HIVE_BAD_DATA,
                     format("ORC ACID file column %s should be named %s: %s", columnIndex, columnName, path));
