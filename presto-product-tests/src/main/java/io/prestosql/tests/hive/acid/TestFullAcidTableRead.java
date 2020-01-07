@@ -25,29 +25,28 @@ import static io.prestosql.tempto.query.QueryExecutor.query;
 import static io.prestosql.tests.TestGroups.HIVE_TRANSACTIONAL;
 import static io.prestosql.tests.TestGroups.STORAGE_FORMATS;
 import static io.prestosql.tests.utils.QueryExecutors.onHive;
-import static java.util.Locale.ENGLISH;
 
 public class TestFullAcidTableRead
         extends HiveProductTest
 {
-    @Test(groups = {STORAGE_FORMATS, HIVE_TRANSACTIONAL}, dataProvider = "fullAcidTableTypes")
-    public void testSelectFromFullAcidTable(FullAcidTableType type)
+    @Test(groups = {STORAGE_FORMATS, HIVE_TRANSACTIONAL}, dataProvider = "isTablePartitioned")
+    public void testRead(boolean isPartitioned)
     {
         if (getHiveVersionMajor() < 3) {
             throw new SkipException("Presto Hive transactional tables are supported with Hive version 3 or above");
         }
 
-        String tableName = "full_acid_table" + type.name().toLowerCase(ENGLISH);
-        createTable(tableName, type.isPartitioned());
+        String tableName = isPartitioned ? "full_acid_read_partitioned" : "full_acid_read";
+        createTable(tableName, isPartitioned);
 
         try {
-            onHive().executeQuery("INSERT OVERWRITE TABLE " + tableName + getHivePartitionString(type.isPartitioned()) + " VALUES (21, 1)");
+            onHive().executeQuery("INSERT OVERWRITE TABLE " + tableName + getHivePartitionString(isPartitioned) + " VALUES (21, 1)");
 
             String selectFromOnePartitionsSql = "SELECT col, fcol FROM " + tableName + " ORDER BY col";
             QueryResult onePartitionQueryResult = query(selectFromOnePartitionsSql);
             assertThat(onePartitionQueryResult).containsOnly(row(21, 1));
 
-            onHive().executeQuery("INSERT INTO TABLE " + tableName + getHivePartitionString(type.isPartitioned()) + " VALUES (22, 2)");
+            onHive().executeQuery("INSERT INTO TABLE " + tableName + getHivePartitionString(isPartitioned) + " VALUES (22, 2)");
             onePartitionQueryResult = query(selectFromOnePartitionsSql);
             assertThat(onePartitionQueryResult).containsExactly(row(21, 1), row(22, 2));
 
@@ -63,7 +62,7 @@ public class TestFullAcidTableRead
 
             // update the existing row
             onHive().executeQuery(
-                    "UPDATE " + tableName + " set col = 23 " + getPrestoPartitionPredicate(type.isPartitioned(), "fcol = 1"));
+                    "UPDATE " + tableName + " set col = 23 " + getPrestoPartitionPredicate(isPartitioned, "fcol = 1"));
             onePartitionQueryResult = query(selectFromOnePartitionsSql);
             assertThat(onePartitionQueryResult).containsOnly(row(23, 1));
         }
@@ -92,48 +91,21 @@ public class TestFullAcidTableRead
 
     private static void createTable(String tableName, boolean isPartitioned)
     {
-        StringBuilder builder = new StringBuilder()
-                .append("CREATE TABLE IF NOT EXISTS ")
-                .append(tableName)
-                .append(" (col INT,")
-                .append("fcol INT) ");
-        if (isPartitioned) {
-            builder.append("PARTITIONED BY (part_col INT) ");
-        }
-
-        builder.append("STORED AS ORC ")
-                .append("TBLPROPERTIES ('transactional'='true') ");
-
-        onHive().executeQuery(builder.toString());
+        onHive().executeQuery("CREATE TABLE IF NOT EXISTS " +
+                tableName +
+                " (col INT," +
+                " fcol INT)" +
+                (isPartitioned ? " PARTITIONED BY (part_col INT)" : "") +
+                "STORED AS ORC " +
+                "TBLPROPERTIES ('transactional'='true') ");
     }
 
     @DataProvider
-    public Object[][] fullAcidTableTypes()
+    public Object[][] isTablePartitioned()
     {
         return new Object[][] {
-                {FullAcidTableType.UNPARTITIONED},
-                {FullAcidTableType.PARTITIONED}
+            {true},
+            {false}
         };
-    }
-
-    private enum FullAcidTableType
-    {
-        UNPARTITIONED {
-            @Override
-            boolean isPartitioned()
-            {
-                return false;
-            }
-        },
-        PARTITIONED {
-            @Override
-            boolean isPartitioned()
-            {
-                return true;
-            }
-        },
-        /**/;
-
-        abstract boolean isPartitioned();
     }
 }
